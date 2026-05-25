@@ -1,0 +1,44 @@
+name: Runseal Smoke Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Basic sandbox
+        uses: always-further/runseal@v0.1.0-rc1
+        with:
+          run: cargo --version
+          policy: |
+            fs:
+              read: ["."]
+              write: []
+            network:
+              default: blocked
+
+      - name: Secret is not exposed to command
+        uses: always-further/runseal@v0.1.0-rc1
+        env:
+          RUNSEAL_QA_API_TOKEN: ${{ secrets.RUNSEAL_QA_API_TOKEN }}
+        with:
+          run: |
+            test -z "$RUNSEAL_QA_API_TOKEN"
+          policy: |
+            fs:
+              read: ["."]
+              write: []
+            network:
+              default: blocked
+            credentials:
+              RUNSEAL_QA_API_TOKEN:
+                host: example.com
+                inject:
+                  mode: header
+                endpoints:
+                  - method: GET
+                    path: "/**"
