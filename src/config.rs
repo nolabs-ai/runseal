@@ -9,12 +9,19 @@ pub struct RunConfig {
     pub fs_write: Vec<String>,
     pub network: NetworkPolicy,
     pub access: Vec<AccessConfig>,
+    pub audit: AuditConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetworkPolicy {
     Blocked,
     AllowDomains(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuditConfig {
+    Disabled,
+    Artifact { dir: String },
 }
 
 #[derive(Debug, Clone)]
@@ -120,12 +127,17 @@ impl RunConfig {
                 .or_else(|| env_value("NONO_ACTION_NETWORK"))
                 .as_deref(),
         );
+        let audit = parse_audit(
+            env_value("RUNSEAL_AUDIT").as_deref(),
+            env_value("RUNSEAL_AUDIT_DIR").as_deref(),
+        )?;
         Ok(Self {
             command,
             fs_read,
             fs_write,
             network,
             access: Vec::new(),
+            audit,
         })
     }
 
@@ -164,6 +176,10 @@ impl RunConfig {
             fs_write,
             network,
             access,
+            audit: parse_audit(
+                env_value("RUNSEAL_AUDIT").as_deref(),
+                env_value("RUNSEAL_AUDIT_DIR").as_deref(),
+            )?,
         })
     }
 }
@@ -188,6 +204,21 @@ fn parse_network(value: Option<&str>) -> NetworkPolicy {
         NetworkPolicy::Blocked
     } else {
         NetworkPolicy::AllowDomains(split_csv(Some(raw)))
+    }
+}
+
+fn parse_audit(value: Option<&str>, dir: Option<&str>) -> Result<AuditConfig> {
+    match value.unwrap_or("false").trim() {
+        "" | "false" | "off" | "none" => Ok(AuditConfig::Disabled),
+        "true" | "artifact" => {
+            let dir = dir
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("runseal-audit");
+            Ok(AuditConfig::Artifact {
+                dir: dir.to_string(),
+            })
+        }
+        value => bail!("unsupported audit mode '{value}'; expected 'false' or 'artifact'"),
     }
 }
 

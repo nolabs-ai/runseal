@@ -1,8 +1,8 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./assets/runseal-dark.png">
-  <img alt="Runseal logo" src="./assets/runseal-light.png" width="800px" style="max-width: 100%;">
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/banner-dark.png">
+  <img alt="Runseal logo" src="./assets/banner-light.png" width="1000px" style="max-width: 100%;">
 </picture>
 
 <p>
@@ -229,6 +229,33 @@ still allowing L7 policy enforcement.
 | `runseal-version` | No | `latest` | Runseal release version to install. Accepts `v0.1.0` or `0.1.0`. |
 | `nono-version` | No | `latest` | nono release version to install. Accepts `v0.1.0` or `0.1.0`. |
 | `verify-attestations` | No | `true` | Verify GitHub artifact attestations for downloaded release assets. |
+| `audit` | No | `false` | Set to `artifact` to upload nono audit evidence as a GitHub Actions artifact. |
+
+## Audit Evidence
+
+Runseal can export the nono audit session for a sandboxed command:
+
+```yaml
+- uses: always-further/runseal@v1
+  with:
+    run: npm rebuild
+    audit: artifact
+    policy: |
+      fs:
+        read: [".", "./node_modules"]
+        write: ["./node_modules"]
+      network:
+        mode: blocked
+```
+
+When enabled, Runseal captures the new nono audit session after the command
+finishes and uploads a `runseal-audit` artifact containing:
+
+- `summary.md`
+- one JSON file per detected nono audit session
+
+Audit export runs before Runseal returns the sandboxed command's exit status, so
+failed or denied commands can still produce audit evidence.
 
 ## Supply Chain Verification
 

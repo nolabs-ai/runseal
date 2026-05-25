@@ -36,6 +36,10 @@ inputs:
     description: "Verify GitHub artifact attestations for downloaded runseal and nono release assets"
     required: false
     default: "true"
+  audit:
+    description: "Export nono audit evidence as a GitHub Actions artifact. Use 'artifact' to enable."
+    required: false
+    default: "false"
 
 runs:
   using: "composite"
@@ -58,3 +62,12 @@ runs:
         RUNSEAL_FS_READ: ${{ inputs.fs-read }}
         RUNSEAL_FS_WRITE: ${{ inputs.fs-write }}
         RUNSEAL_NETWORK: ${{ inputs.network }}
+        RUNSEAL_AUDIT: ${{ inputs.audit }}
+        RUNSEAL_AUDIT_DIR: ${{ runner.temp }}/runseal-audit
+    - name: Upload Runseal audit
+      if: ${{ always() && (inputs.audit == 'artifact' || inputs.audit == 'true') }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: runseal-audit
+        path: ${{ runner.temp }}/runseal-audit
+        if-no-files-found: warn
