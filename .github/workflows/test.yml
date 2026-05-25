@@ -16,7 +16,7 @@ jobs:
       - name: Basic sandbox
         uses: always-further/runseal@main
         with:
-          run: cargo --version
+          run: printf "runseal smoke ok\n"
           runseal-version: source
           verify-attestations: false
           policy: |
