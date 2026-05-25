@@ -50,7 +50,7 @@ runs:
   steps:
     - name: Setup Runseal
       shell: bash
-      run: ${{ github.action_path }}/setup.sh
+      run: bash "${{ github.action_path }}/setup.sh"
       env:
         RUNSEAL_VERSION: ${{ inputs.runseal-version }}
         NONO_VERSION: ${{ inputs.nono-version }}
