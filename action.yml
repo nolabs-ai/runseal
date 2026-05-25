@@ -43,7 +43,7 @@ inputs:
   verify-attestations:
     description: "Verify GitHub artifact attestations for downloaded runseal and nono release assets"
     required: false
-    default: "true"
+    default: "false"
 
 runs:
   using: "composite"

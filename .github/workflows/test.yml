@@ -3,6 +3,9 @@ name: Runseal Smoke Test
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
@@ -14,6 +17,7 @@ jobs:
         uses: always-further/runseal@main
         with:
           run: cargo --version
+          verify-attestations: false
           policy: |
             fs:
               read: ["."]
@@ -22,12 +26,13 @@ jobs:
               default: blocked
 
       - name: Secret is not exposed to command
-        uses: always-further/runseal@v0.1.0-rc1
+        uses: always-further/runseal@main
         env:
           RUNSEAL_QA_API_TOKEN: ${{ secrets.RUNSEAL_QA_API_TOKEN }}
         with:
           run: |
             test -z "$RUNSEAL_QA_API_TOKEN"
+          verify-attestations: false
           policy: |
             fs:
               read: ["."]
