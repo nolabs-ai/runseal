@@ -1,10 +1,11 @@
+mod audit;
 mod config;
 mod profile;
 mod runner;
 mod secrets;
 
 use anyhow::{bail, Context, Result};
-use config::RunConfig;
+use config::{AuditConfig, RunConfig};
 use std::env;
 
 fn main() {
@@ -35,5 +36,18 @@ fn run() -> Result<()> {
     let profile_path = sealed.dir.path().join("profile.json");
     profile::write_profile(&profile_path, &profile).context("failed to write nono profile")?;
 
-    runner::run_nono(&config, &sealed, &profile_path).context("nono run failed")
+    let audit_before = match config.audit {
+        AuditConfig::Disabled => None,
+        AuditConfig::Artifact { .. } => Some(audit::AuditSnapshot::capture()),
+    };
+
+    let run_result = runner::run_nono(&config, &sealed, &profile_path);
+
+    if let (AuditConfig::Artifact { dir }, Some(before)) = (&config.audit, audit_before) {
+        let sessions = before.new_sessions_since();
+        audit::export_sessions(&sessions, std::path::Path::new(dir))
+            .context("failed to export nono audit evidence")?;
+    }
+
+    run_result.context("nono run failed")
 }

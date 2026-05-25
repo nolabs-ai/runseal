@@ -131,6 +131,7 @@ mod tests {
             fs_write: Vec::new(),
             network: NetworkPolicy::Blocked,
             access: Vec::new(),
+            audit: crate::config::AuditConfig::Disabled,
         };
         let sealed = SealedCredentials {
             dir: tempfile::tempdir().expect("tempdir"),

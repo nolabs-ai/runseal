@@ -32,6 +32,7 @@ jobs:
               "${GITHUB_BASE_URL}/user"
             printf "github PAT injected ok\n"
           runseal-version: source
+          audit: artifact
           policy: |
             fs:
               read: ["."]
