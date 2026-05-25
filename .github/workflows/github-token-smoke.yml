@@ -32,7 +32,6 @@ jobs:
               "${GITHUB_BASE_URL}/user"
             printf "github PAT injected ok\n"
           runseal-version: source
-          verify-attestations: false
           policy: |
             fs:
               read: ["."]

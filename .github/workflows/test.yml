@@ -18,7 +18,6 @@ jobs:
         with:
           run: printf "runseal smoke ok\n"
           runseal-version: source
-          verify-attestations: false
           policy: |
             fs:
               read: ["."]
@@ -35,7 +34,6 @@ jobs:
             test -z "$RUNSEAL_QA_API_TOKEN"
             printf "secret stripped ok\n"
           runseal-version: source
-          verify-attestations: false
           policy: |
             fs:
               read: ["."]
