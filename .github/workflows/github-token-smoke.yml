@@ -1,0 +1,45 @@
+name: GitHub Token Smoke Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  github-token:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: GitHub token is injected only for allowed API route
+        uses: always-further/runseal@main
+        env:
+          RUNSEAL_GITHUB_TOKEN: ${{ github.token }}
+        with:
+          run: |
+            test -z "$RUNSEAL_GITHUB_TOKEN"
+            curl -fsS \
+              -H "Authorization: Bearer ${RUNSEAL_CRED_cred_0}" \
+              -H "Accept: application/vnd.github+json" \
+              "${CRED_0_BASE_URL}/repos/${GITHUB_REPOSITORY}"
+            printf "github token injected ok\n"
+          runseal-version: source
+          verify-attestations: false
+          policy: |
+            fs:
+              read: ["."]
+              write: []
+            network:
+              default: blocked
+            credentials:
+              RUNSEAL_GITHUB_TOKEN:
+                host: api.github.com
+                inject:
+                  mode: header
+                endpoints:
+                  - method: GET
+                    path: "/repos/${{ github.repository }}"
