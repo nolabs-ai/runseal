@@ -161,6 +161,9 @@ install_runseal_from_source() {
 
 TARGET="$(detect_target)"
 
+mkdir -p "${HOME}/.nono/sessions"
+chmod 700 "${HOME}/.nono" "${HOME}/.nono/sessions"
+
 install_release_binary "nono" "${NONO_REPO}" "${NONO_VERSION}" "${TARGET}"
 
 if [[ "${RUNSEAL_VERSION}" == "source" ]]; then
