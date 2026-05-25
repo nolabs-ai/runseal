@@ -26,7 +26,7 @@ jobs:
             curl -fsS \
               -H "Authorization: Bearer ${RUNSEAL_CRED_cred_0}" \
               -H "Accept: application/vnd.github+json" \
-              "${CRED_0_BASE_URL}/user" >/dev/null
+              "${CRED_0_BASE_URL}/user"
             printf "github PAT injected ok\n"
           runseal-version: source
           verify-attestations: false
