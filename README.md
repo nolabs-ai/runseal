@@ -19,9 +19,9 @@
   </a>
 </p>
 </div>
-Runseal provides a sandboxed environment for CI steps that need secrets, network access, or filesystem access.
+runsense was built to solve the problem of software supply chain attacks, that often triggered from GitHub Action based exploits.
 
-By using [nono's](https://github.com/always-further/nono) strong kernel enforced sandboxing, runseal can protect secrets, files and network access from untrusted code, while still allowing necessary operations through a flexible policy system.
+By using [nono's](https://github.com/always-further/nono) strong kernel enforced sandboxing, runseal can protect secrets/tokens, senstive files and network access from untrusted / malicious code, while still allowing necessary needed software engineering operations through a flexible policy system.
 
 ## What Runseal Does
 
