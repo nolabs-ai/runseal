@@ -44,8 +44,8 @@ fn run() -> Result<()> {
     let run_result = runner::run_nono(&config, &sealed, &profile_path);
 
     if let (AuditConfig::Artifact { dir }, Some(before)) = (&config.audit, audit_before) {
-        let sessions = before.new_sessions_since();
-        audit::export_sessions(&sessions, std::path::Path::new(dir))
+        let export = before.new_sessions_since();
+        audit::export_sessions(&export, std::path::Path::new(dir))
             .context("failed to export nono audit evidence")?;
     }
 
