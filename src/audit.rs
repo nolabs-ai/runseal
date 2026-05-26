@@ -6,7 +6,12 @@ use std::process::Command;
 
 #[derive(Debug, Clone)]
 pub struct AuditSnapshot {
-    sessions: BTreeSet<String>,
+    sessions: Vec<String>,
+}
+
+pub struct AuditExport {
+    pub sessions: Vec<String>,
+    pub used_latest_fallback: bool,
 }
 
 impl AuditSnapshot {
@@ -16,13 +21,30 @@ impl AuditSnapshot {
         }
     }
 
-    pub fn new_sessions_since(&self) -> Vec<String> {
+    pub fn new_sessions_since(&self) -> AuditExport {
         let after = audit_sessions().unwrap_or_default();
-        after.difference(&self.sessions).cloned().collect()
+        let before: BTreeSet<&str> = self.sessions.iter().map(String::as_str).collect();
+        let mut sessions = after
+            .iter()
+            .filter(|session| !before.contains(session.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let used_latest_fallback = sessions.is_empty();
+        if used_latest_fallback {
+            if let Some(latest) = after.first() {
+                sessions.push(latest.clone());
+            }
+        }
+
+        AuditExport {
+            sessions,
+            used_latest_fallback,
+        }
     }
 }
 
-pub fn export_sessions(sessions: &[String], output_dir: &Path) -> Result<()> {
+pub fn export_sessions(export: &AuditExport, output_dir: &Path) -> Result<()> {
     fs::create_dir_all(output_dir).with_context(|| {
         format!(
             "failed to create audit output dir '{}'",
@@ -33,11 +55,17 @@ pub fn export_sessions(sessions: &[String], output_dir: &Path) -> Result<()> {
     let mut summary = String::new();
     summary.push_str("# Runseal Audit Export\n\n");
 
-    if sessions.is_empty() {
+    if export.sessions.is_empty() {
         summary.push_str("No new nono audit sessions were detected.\n");
     }
 
-    for session in sessions {
+    if export.used_latest_fallback && !export.sessions.is_empty() {
+        summary.push_str(
+            "No before/after session diff was detected; exported latest visible session.\n\n",
+        );
+    }
+
+    for session in &export.sessions {
         let json = Command::new("nono")
             .arg("audit")
             .arg("show")
@@ -70,7 +98,7 @@ pub fn export_sessions(sessions: &[String], output_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn audit_sessions() -> Result<BTreeSet<String>> {
+fn audit_sessions() -> Result<Vec<String>> {
     let output = Command::new("nono")
         .arg("audit")
         .arg("list")
@@ -78,7 +106,7 @@ fn audit_sessions() -> Result<BTreeSet<String>> {
         .context("failed to run nono audit list")?;
 
     if !output.status.success() {
-        return Ok(BTreeSet::new());
+        return Ok(Vec::new());
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
