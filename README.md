@@ -20,9 +20,9 @@
 </p>
 </div>
 
-runsense was built to solve the problem of software supply chain attacks, that often triggered from GitHub Action based exploits.
+Runseal was built to solve the problem of software supply chain attacks that are often triggered from GitHub Actions-based exploits.
 
-By using [nono's](https://github.com/always-further/nono) strong kernel enforced sandboxing, runseal can protect secrets/tokens, senstive files and network access from untrusted / malicious code, while still allowing necessary needed software engineering operations through a flexible policy system.
+By using [nono's](https://github.com/always-further/nono) strong kernel-enforced sandboxing, runseal can protect secrets/tokens, sensitive files, and network access from untrusted or malicious code, while still allowing necessary software engineering operations through a flexible policy system.
 
 The project is developed by the engineers behind [sigstore](https://sigstore.dev) and [nono](https://nono.sh).
 
@@ -232,7 +232,7 @@ still allowing L7 policy enforcement.
 | `runseal-version` | No | `latest` | Runseal release version to install. Accepts `v0.1.0` or `0.1.0`. |
 | `nono-version` | No | `latest` | nono release version to install. Accepts `v0.1.0` or `0.1.0`. |
 | `verify-attestations` | No | `true` | Verify GitHub artifact attestations for downloaded release assets. |
-| `audit` | No | `false` | Set to `artifact` to upload nono audit evidence as a GitHub Actions artifact. |
+| `audit` | No | `false` | Set to `artifact` or `true` to upload nono audit evidence as a GitHub Actions artifact. |
 
 ## Audit Evidence
 

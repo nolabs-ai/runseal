@@ -37,7 +37,7 @@ inputs:
     required: false
     default: "true"
   audit:
-    description: "Export nono audit evidence as a GitHub Actions artifact. Use 'artifact' to enable."
+    description: "Export nono audit evidence as a GitHub Actions artifact. Set to 'artifact' or 'true' to enable."
     required: false
     default: "false"
 
