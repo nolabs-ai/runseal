@@ -1,6 +1,6 @@
 use crate::config::{NetworkPolicy, RunConfig};
 use crate::secrets::SealedCredentials;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -11,6 +11,8 @@ pub struct NonoProfile {
     extends: &'static str,
     meta: Meta,
     groups: Groups,
+    #[serde(skip_serializing_if = "Filesystem::is_empty")]
+    filesystem: Filesystem,
     network: Network,
 }
 
@@ -23,6 +25,18 @@ struct Meta {
 #[derive(Debug, Serialize)]
 struct Groups {
     exclude: Vec<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+struct Filesystem {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    deny: Vec<String>,
+}
+
+impl Filesystem {
+    fn is_empty(&self) -> bool {
+        self.deny.is_empty()
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -94,6 +108,9 @@ pub fn build_profile(config: &RunConfig, sealed: &SealedCredentials) -> Result<N
         groups: Groups {
             exclude: excluded_groups(),
         },
+        filesystem: Filesystem {
+            deny: credential_deny_paths(sealed)?,
+        },
         network: Network {
             block: matches!(config.network, NetworkPolicy::Blocked),
             allow_domain: allow_domains.into_iter().collect(),
@@ -101,6 +118,24 @@ pub fn build_profile(config: &RunConfig, sealed: &SealedCredentials) -> Result<N
             custom_credentials,
         },
     })
+}
+
+fn credential_deny_paths(sealed: &SealedCredentials) -> Result<Vec<String>> {
+    if sealed.access.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut paths = BTreeSet::new();
+    paths.insert(sealed.dir.path().display().to_string());
+
+    let canonical = sealed
+        .dir
+        .path()
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize '{}'", sealed.dir.path().display()))?;
+    paths.insert(canonical.display().to_string());
+
+    Ok(paths.into_iter().collect())
 }
 
 fn upstream_host(url: &str) -> Option<&str> {
@@ -244,6 +279,45 @@ mod tests {
             serde_json::to_value(&profile).expect("profile serializes as JSON");
 
         assert_eq!(json["network"]["block"], true);
+    }
+
+    #[test]
+    fn generated_profile_denies_credential_tempdir() {
+        let config = RunConfig {
+            command: "true".to_string(),
+            fs_read: vec![".".to_string()],
+            fs_write: Vec::new(),
+            network: NetworkPolicy::Blocked,
+            access: Vec::new(),
+            audit: crate::config::AuditConfig::Disabled,
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let credential_file = dir.path().join("cratesio");
+        let sealed = SealedCredentials {
+            access: vec![SealedCredential {
+                name: "cratesio".to_string(),
+                secret_env: "CARGO_REGISTRY_TOKEN".to_string(),
+                upstream: "https://crates.io".to_string(),
+                tls_ca: None,
+                inject_mode: "header".to_string(),
+                credential_file,
+                endpoint_rules: Vec::new(),
+            }],
+            dir,
+            sanitized_env: BTreeMap::new(),
+        };
+
+        let profile = build_profile(&config, &sealed).expect("profile");
+        let json: serde_json::Value =
+            serde_json::to_value(&profile).expect("profile serializes as JSON");
+        let denied = json["filesystem"]["deny"]
+            .as_array()
+            .expect("filesystem.deny is present");
+
+        assert!(denied.iter().any(|path| {
+            path.as_str()
+                .is_some_and(|path| path == sealed.dir.path().to_string_lossy())
+        }));
     }
 
     #[test]
