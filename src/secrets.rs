@@ -31,7 +31,12 @@ pub fn seal_credentials(config: &RunConfig) -> Result<SealedCredentials> {
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700))?;
 
     let secret_names: HashSet<&str> = config.access.iter().map(|c| c.secret.as_str()).collect();
-    let sanitized_env: BTreeMap<String, String> = env::vars()
+    let sanitized_env: BTreeMap<String, String> = env::vars_os()
+        .filter_map(|(key, value)| {
+            let key = key.into_string().ok()?;
+            let value = value.into_string().ok()?;
+            Some((key, value))
+        })
         .filter(|(key, _)| !secret_names.contains(key.as_str()))
         .filter(|(key, _)| !key.starts_with("RUNSEAL_"))
         .filter(|(key, _)| !key.starts_with("NONO_ACTION_"))
@@ -41,8 +46,7 @@ pub fn seal_credentials(config: &RunConfig) -> Result<SealedCredentials> {
     for grant in &config.access {
         validate_access_grant_name(&grant.name)?;
 
-        let secret = env::var(&grant.secret)
-            .with_context(|| format!("access secret env var '{}' is not set", grant.secret))?;
+        let secret = read_secret_env(&grant.secret)?;
         if secret.is_empty() {
             bail!("access secret env var '{}' is empty", grant.secret);
         }
@@ -70,6 +74,15 @@ pub fn seal_credentials(config: &RunConfig) -> Result<SealedCredentials> {
         access: sealed,
         sanitized_env,
     })
+}
+
+fn read_secret_env(secret_env: &str) -> Result<String> {
+    let value = env::var_os(secret_env)
+        .with_context(|| format!("access secret env var '{secret_env}' is not set"))?;
+    match value.into_string() {
+        Ok(value) => Ok(value),
+        Err(_) => bail!("access secret env var '{secret_env}' is not valid UTF-8"),
+    }
 }
 
 fn validate_access_grant_name(name: &str) -> Result<()> {
@@ -115,6 +128,8 @@ fn secret_mask_lines(secret: &str) -> impl Iterator<Item = &str> {
 mod tests {
     use super::*;
     use crate::config::{AccessConfig, AuditConfig, NetworkPolicy};
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
 
     #[test]
     fn validates_safe_access_grant_names() {
@@ -164,6 +179,30 @@ mod tests {
         assert!(
             err.to_string().contains("access grant name"),
             "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn non_utf8_secret_error_does_not_include_raw_value() {
+        let name = "RUNSEAL_TEST_NON_UTF8_SECRET";
+        let value = OsString::from_vec(b"TOPSECRET-\xFF\xFE-RAWKEY".to_vec());
+        env::set_var(name, &value);
+
+        let err = read_secret_env(name).expect_err("non-UTF-8 secret must fail");
+        env::remove_var(name);
+
+        let rendered = format!("{err:#}");
+        assert!(
+            rendered.contains("not valid UTF-8"),
+            "unexpected error: {rendered}"
+        );
+        assert!(
+            !rendered.contains("TOPSECRET"),
+            "error leaked secret prefix: {rendered}"
+        );
+        assert!(
+            !rendered.contains("RAWKEY"),
+            "error leaked secret suffix: {rendered}"
         );
     }
 
