@@ -95,7 +95,7 @@ pub fn build_profile(config: &RunConfig, sealed: &SealedCredentials) -> Result<N
             exclude: excluded_groups(),
         },
         network: Network {
-            block: matches!(config.network, NetworkPolicy::Blocked) && credentials.is_empty(),
+            block: matches!(config.network, NetworkPolicy::Blocked),
             allow_domain: allow_domains.into_iter().collect(),
             credentials,
             custom_credentials,
@@ -212,6 +212,38 @@ mod tests {
 
         assert!(json.contains(r#""env_var":"CARGO_REGISTRY_TOKEN""#));
         assert!(!json.contains("RUNSEAL_ACCESS_CRATESIO_TOKEN"));
+    }
+
+    #[test]
+    fn generated_profile_blocks_network_when_credentials_are_configured() {
+        let config = RunConfig {
+            command: "true".to_string(),
+            fs_read: vec![".".to_string()],
+            fs_write: Vec::new(),
+            network: NetworkPolicy::Blocked,
+            access: Vec::new(),
+            audit: crate::config::AuditConfig::Disabled,
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sealed = SealedCredentials {
+            access: vec![SealedCredential {
+                name: "cratesio".to_string(),
+                secret_env: "CARGO_REGISTRY_TOKEN".to_string(),
+                upstream: "https://crates.io".to_string(),
+                tls_ca: None,
+                inject_mode: "header".to_string(),
+                credential_file: dir.path().join("cratesio"),
+                endpoint_rules: Vec::new(),
+            }],
+            dir,
+            sanitized_env: BTreeMap::new(),
+        };
+
+        let profile = build_profile(&config, &sealed).expect("profile");
+        let json: serde_json::Value =
+            serde_json::to_value(&profile).expect("profile serializes as JSON");
+
+        assert_eq!(json["network"]["block"], true);
     }
 
     #[test]
