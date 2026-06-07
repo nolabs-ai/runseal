@@ -46,7 +46,8 @@ pub fn seal_credentials(config: &RunConfig) -> Result<SealedCredentials> {
         if secret.is_empty() {
             bail!("access secret env var '{}' is empty", grant.secret);
         }
-        println!("::add-mask::{secret}");
+        validate_secret_for_inject_mode(&grant.secret, &grant.inject_mode, &secret)?;
+        emit_secret_masks(&secret);
 
         let name = grant.name.clone();
         let path = dir.path().join(&name);
@@ -85,6 +86,29 @@ fn validate_access_grant_name(name: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn validate_secret_for_inject_mode(
+    secret_env: &str,
+    inject_mode: &str,
+    secret: &str,
+) -> Result<()> {
+    if inject_mode == "header" && secret.contains(['\r', '\n']) {
+        bail!(
+            "access secret env var '{secret_env}' contains a newline, which cannot be injected as an HTTP header"
+        );
+    }
+    Ok(())
+}
+
+fn emit_secret_masks(secret: &str) {
+    for line in secret_mask_lines(secret) {
+        println!("::add-mask::{line}");
+    }
+}
+
+fn secret_mask_lines(secret: &str) -> impl Iterator<Item = &str> {
+    secret.split(['\r', '\n']).filter(|line| !line.is_empty())
 }
 
 #[cfg(test)]
@@ -141,5 +165,30 @@ mod tests {
             err.to_string().contains("access grant name"),
             "unexpected error: {err:#}"
         );
+    }
+
+    #[test]
+    fn masks_each_non_empty_line_of_multiline_secret() {
+        let lines: Vec<_> = secret_mask_lines("first\n\nsecond\r\nthird\r").collect();
+
+        assert_eq!(lines, vec!["first", "second", "third"]);
+    }
+
+    #[test]
+    fn header_injection_rejects_newline_secrets() {
+        let err = validate_secret_for_inject_mode("RUNSEAL_TEST_SECRET", "header", "first\nsecond")
+            .expect_err("header secrets with newlines must fail");
+
+        assert!(
+            err.to_string()
+                .contains("cannot be injected as an HTTP header"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn non_header_injection_allows_newline_secrets() {
+        validate_secret_for_inject_mode("RUNSEAL_TEST_SECRET", "body", "first\nsecond")
+            .expect("non-header multiline secret");
     }
 }
