@@ -27,11 +27,11 @@ inputs:
   runseal-version:
     description: "Runseal version to install, without or with leading v"
     required: false
-    default: "latest"
+    default: "0.3.1"
   nono-version:
     description: "nono version to install, without or with leading v"
     required: false
-    default: "latest"
+    default: "0.62.0"
   verify-attestations:
     description: "Verify GitHub artifact attestations for downloaded runseal and nono release assets"
     required: false

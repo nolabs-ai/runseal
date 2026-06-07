@@ -16,18 +16,16 @@
 
 Runseal was built to solve the problem of software supply chain attacks that are often triggered from GitHub Actions-based exploits.
 
-By using [nono's](https://github.com/always-further/nono) strong kernel-enforced sandboxing, runseal can protect secrets/tokens, sensitive files, and network access from untrusted or malicious code, while still allowing necessary software engineering operations through a flexible policy system.
+We built runseal in response to the rise of supply chain attacks targeting GitHub Actions, where attackers often gain access to repository secrets and use them to exfiltrate data or deploy malicious code. By using [nono's](https://github.com/always-further/nono) kernel-enforced sandboxing, runseal can protect sensitive files, secrets/tokens, and filter network access from untrusted or malicious code, while still allowing necessary software engineering operations through a flexible policy system.
 
 From the same folks who brought you [sigstore](https://sigstore.dev) and [nono](https://nono.sh).
 
 ## What Runseal Does
 
-- Replace raw secrets within a workflow with phantom credentials that are useless if leaked
-- Protects sensitive files and secrets from exfiltration by untrusted code in CI
+- Replace real secrets within a workflow with session scoped phantom credentials that are useless if ever leaked
+- Protects sensitive files and secrets from exfiltration by untrusted code in CI using Landlock's kernel-enforced sandboxing via nono.
 - L7 network filtering to lock down network access by HTTP method and path
-- Uses `nono` TLS interception so HTTPS requests can be filtered by method/path
 - Blocks network by default unless policy explicitly allows a host or credential route
-- Restricts filesystem reads and writes to declared paths
 - Cryptographic audit captured outside of the sandbox for all network requests, credential injections, and filesystem access
 
 ## Quick Start
@@ -223,8 +221,8 @@ still allowing L7 policy enforcement.
 | `fs-read` | No | empty | Comma-separated read paths when `policy` is not set. |
 | `fs-write` | No | empty | Comma-separated write paths when `policy` is not set. |
 | `network` | No | `blocked` | Network policy when `policy` is not set: `blocked` or comma-separated domains. |
-| `runseal-version` | No | `latest` | Runseal release version to install. Accepts `v0.1.0` or `0.1.0`. |
-| `nono-version` | No | `latest` | nono release version to install. Accepts `v0.1.0` or `0.1.0`. |
+| `runseal-version` | No | `0.3.1` | Runseal release version to install. Accepts `v0.1.0` or `0.1.0`. |
+| `nono-version` | No | `0.62.0` | nono release version to install. Accepts `v0.1.0` or `0.1.0`. |
 | `verify-attestations` | No | `true` | Verify GitHub artifact attestations for downloaded release assets. |
 | `audit` | No | `false` | Set to `artifact` or `true` to upload nono audit evidence as a GitHub Actions artifact. |
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RUNSEAL_VERSION="${RUNSEAL_VERSION:-latest}"
-NONO_VERSION="${NONO_VERSION:-latest}"
+RUNSEAL_VERSION="${RUNSEAL_VERSION:-0.3.1}"
+NONO_VERSION="${NONO_VERSION:-0.62.0}"
 RUNSEAL_REPO="${RUNSEAL_REPO:-always-further/runseal}"
 NONO_REPO="${NONO_REPO:-always-further/nono}"
 RUNSEAL_VERIFY_ATTESTATIONS="${RUNSEAL_VERIFY_ATTESTATIONS:-true}"
