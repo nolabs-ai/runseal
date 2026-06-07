@@ -231,6 +231,10 @@ fn validate_url(url: &str) -> Result<String> {
 }
 
 fn parse_allow_rules(allow: &[String]) -> Result<Vec<EndpointRule>> {
+    if allow.is_empty() {
+        bail!("access grants require at least one allow rule; add allow entries for each permitted METHOD /path");
+    }
+
     allow
         .iter()
         .map(|rule| {
@@ -246,4 +250,76 @@ fn parse_allow_rules(allow: &[String]) -> Result<Vec<EndpointRule>> {
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn access_grant_without_allow_rules_fails_closed() {
+        let policy: PolicyInput = serde_yaml::from_str(
+            r#"
+access:
+  cratesio:
+    secret: CARGO_REGISTRY_TOKEN
+    url: https://crates.io
+"#,
+        )
+        .expect("policy yaml");
+
+        let err = RunConfig::from_policy("true".to_string(), policy)
+            .expect_err("missing allow rules must fail");
+
+        assert!(
+            err.to_string()
+                .contains("access grants require at least one allow rule"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn access_grant_with_empty_allow_rules_fails_closed() {
+        let policy: PolicyInput = serde_yaml::from_str(
+            r#"
+access:
+  cratesio:
+    secret: CARGO_REGISTRY_TOKEN
+    url: https://crates.io
+    allow: []
+"#,
+        )
+        .expect("policy yaml");
+
+        let err = RunConfig::from_policy("true".to_string(), policy)
+            .expect_err("empty allow rules must fail");
+
+        assert!(
+            err.to_string()
+                .contains("access grants require at least one allow rule"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn access_grant_with_allow_rules_parses() {
+        let policy: PolicyInput = serde_yaml::from_str(
+            r#"
+access:
+  cratesio:
+    secret: CARGO_REGISTRY_TOKEN
+    url: https://crates.io
+    allow:
+      - GET /api/v1/crates
+"#,
+        )
+        .expect("policy yaml");
+
+        let config = RunConfig::from_policy("true".to_string(), policy).expect("policy parses");
+
+        assert_eq!(config.access.len(), 1);
+        assert_eq!(config.access[0].endpoint_rules.len(), 1);
+        assert_eq!(config.access[0].endpoint_rules[0].method, "GET");
+        assert_eq!(config.access[0].endpoint_rules[0].path, "/api/v1/crates");
+    }
 }
