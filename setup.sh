@@ -52,9 +52,22 @@ verify_checksum() {
     local asset="$2"
 
     if command -v sha256sum >/dev/null 2>&1; then
-        grep "  ${asset}$" "${sums_file}" | sha256sum -c -
+        grep -F "  ${asset}" "${sums_file}" | awk -v asset="${asset}" '$2 == asset' | sha256sum -c -
     elif command -v shasum >/dev/null 2>&1; then
-        grep "  ${asset}$" "${sums_file}" | shasum -a 256 -c -
+        grep -F "  ${asset}" "${sums_file}" | awk -v asset="${asset}" '$2 == asset' | shasum -a 256 -c -
+    else
+        echo "::error::No SHA-256 verifier found on PATH"
+        exit 1
+    fi
+}
+
+sha256_file() {
+    local file="$1"
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "${file}" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "${file}" | awk '{print $1}'
     else
         echo "::error::No SHA-256 verifier found on PATH"
         exit 1
@@ -91,14 +104,62 @@ download_checksums() {
     local base_url="https://github.com/${repo}/releases/download/v${version}"
 
     if curl -fsSL "${base_url}/SHA256SUMS" -o "${output}" 2>/dev/null; then
+        printf '%s\n' "SHA256SUMS"
         return
     fi
     if curl -fsSL "${base_url}/SHA256SUMS.txt" -o "${output}" 2>/dev/null; then
+        printf '%s\n' "SHA256SUMS.txt"
         return
     fi
 
-    echo "::error::No SHA256SUMS asset found for ${repo} v${version}"
+    echo "::error::No SHA256SUMS asset found for ${repo} v${version}" >&2
     exit 1
+}
+
+verify_cached_binary() {
+    local name="$1"
+    local repo="$2"
+    local version="$3"
+    local target="$4"
+    local install_dir="$5"
+    local asset="$6"
+    local cached_binary="${install_dir}/${name}"
+    local verify_root verify_dir tarball sums_file sums_asset cached_hash verified_hash
+
+    verify_root="${RUNNER_TEMP:-/tmp}"
+    mkdir -p "${verify_root}"
+    verify_dir="$(mktemp -d "${verify_root}/runseal-verify.XXXXXX")"
+    tarball="${verify_dir}/${asset}"
+    sums_file="${verify_dir}/SHA256SUMS"
+
+    echo "Verifying cached ${name} v${version} at ${cached_binary}"
+    curl -fsSL "https://github.com/${repo}/releases/download/v${version}/${asset}" -o "${tarball}"
+    sums_asset="$(download_checksums "${repo}" "${version}" "${sums_file}")"
+    if [[ "${sums_asset}" != "$(basename "${sums_file}")" ]]; then
+        mv "${sums_file}" "${verify_dir}/${sums_asset}"
+        sums_file="${verify_dir}/${sums_asset}"
+    fi
+    (
+        cd "${verify_dir}"
+        verify_attestation "${repo}" "${version}" "${asset}"
+        verify_checksum "${sums_file}" "${asset}"
+        tar -xzf "${asset}"
+    )
+
+    if [[ ! -x "${verify_dir}/${name}" ]]; then
+        echo "::error::Verified ${asset} did not contain executable ${name}"
+        rm -rf "${verify_dir}"
+        exit 1
+    fi
+
+    cached_hash="$(sha256_file "${cached_binary}")"
+    verified_hash="$(sha256_file "${verify_dir}/${name}")"
+    rm -rf "${verify_dir}"
+
+    if [[ "${cached_hash}" != "${verified_hash}" ]]; then
+        echo "::error::Cached ${name} binary does not match verified ${repo} v${version} release artifact"
+        exit 1
+    fi
 }
 
 install_release_binary() {
@@ -106,7 +167,7 @@ install_release_binary() {
     local repo="$2"
     local requested_version="$3"
     local target="$4"
-    local version asset url install_dir tarball sums_file
+    local version asset url install_dir tarball sums_file sums_asset
 
     version="$(resolve_version "${repo}" "${requested_version}")"
     asset="${name}-v${version}-${target}.tar.gz"
@@ -117,6 +178,7 @@ install_release_binary() {
 
     if [[ -x "${install_dir}/${name}" ]]; then
         echo "${name} v${version} already installed at ${install_dir}/${name}"
+        verify_cached_binary "${name}" "${repo}" "${version}" "${target}" "${install_dir}" "${asset}"
         echo "${install_dir}" >> "${GITHUB_PATH}"
         export PATH="${install_dir}:${PATH}"
         return
@@ -125,13 +187,17 @@ install_release_binary() {
     mkdir -p "${install_dir}"
     echo "Downloading ${name} v${version} for ${target}"
     curl -fsSL "${url}" -o "${tarball}"
-    download_checksums "${repo}" "${version}" "${sums_file}"
+    sums_asset="$(download_checksums "${repo}" "${version}" "${sums_file}")"
+    if [[ "${sums_asset}" != "$(basename "${sums_file}")" ]]; then
+        mv "${sums_file}" "${install_dir}/${sums_asset}"
+        sums_file="${install_dir}/${sums_asset}"
+    fi
     (
         cd "${install_dir}"
-        verify_checksum "${sums_file}" "${asset}"
         verify_attestation "${repo}" "${version}" "${asset}"
+        verify_checksum "${sums_file}" "${asset}"
         tar -xzf "${asset}"
-        rm -f "${asset}" "SHA256SUMS"
+        rm -f "${asset}" "${sums_asset}"
     )
     chmod +x "${install_dir}/${name}"
     echo "${install_dir}" >> "${GITHUB_PATH}"
