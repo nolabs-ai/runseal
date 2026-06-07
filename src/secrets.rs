@@ -39,6 +39,8 @@ pub fn seal_credentials(config: &RunConfig) -> Result<SealedCredentials> {
 
     let mut sealed = Vec::new();
     for grant in &config.access {
+        validate_access_grant_name(&grant.name)?;
+
         let secret = env::var(&grant.secret)
             .with_context(|| format!("access secret env var '{}' is not set", grant.secret))?;
         if secret.is_empty() {
@@ -67,4 +69,77 @@ pub fn seal_credentials(config: &RunConfig) -> Result<SealedCredentials> {
         access: sealed,
         sanitized_env,
     })
+}
+
+fn validate_access_grant_name(name: &str) -> Result<()> {
+    if name.is_empty()
+        || name.contains('/')
+        || name.contains("..")
+        || name.contains('\0')
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    {
+        bail!(
+            "access grant name '{name}' is invalid; use only [a-zA-Z0-9_-] and no path separators"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{AccessConfig, AuditConfig, NetworkPolicy};
+
+    #[test]
+    fn validates_safe_access_grant_names() {
+        for name in ["npm", "crates_io", "deploy-123", "A_B-C9"] {
+            validate_access_grant_name(name).expect("valid access grant name");
+        }
+    }
+
+    #[test]
+    fn rejects_access_grant_names_that_can_escape_or_break_profile_keys() {
+        for name in [
+            "",
+            "../profile",
+            "profile/secret",
+            "profile\\secret",
+            "profile.secret",
+            "profile secret",
+            "profile\0secret",
+            "ümlaut",
+        ] {
+            assert!(
+                validate_access_grant_name(name).is_err(),
+                "expected {name:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_access_grant_name_before_secret_lookup() {
+        let config = RunConfig {
+            command: "true".to_string(),
+            fs_read: Vec::new(),
+            fs_write: Vec::new(),
+            network: NetworkPolicy::Blocked,
+            access: vec![AccessConfig {
+                name: "../profile.json".to_string(),
+                secret: "RUNSEAL_TEST_SECRET_THAT_IS_NOT_SET".to_string(),
+                upstream: "https://crates.io".to_string(),
+                tls_ca: None,
+                inject_mode: "header".to_string(),
+                endpoint_rules: Vec::new(),
+            }],
+            audit: AuditConfig::Disabled,
+        };
+
+        let err = seal_credentials(&config).expect_err("invalid grant name must fail");
+        assert!(
+            err.to_string().contains("access grant name"),
+            "unexpected error: {err:#}"
+        );
+    }
 }
