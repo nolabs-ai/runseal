@@ -63,7 +63,7 @@ verify_checksum() {
 
 verify_attestation() {
     local repo="$1"
-    local _version="$2"
+    local version="$2"
     local artifact="$3"
 
     if [[ "${RUNSEAL_VERIFY_ATTESTATIONS}" != "true" ]]; then
@@ -80,6 +80,7 @@ verify_attestation() {
     gh attestation verify "${artifact}" \
         --repo "${repo}" \
         --signer-repo "${repo}" \
+        --source-ref "refs/tags/v${version}" \
         --deny-self-hosted-runners
 }
 
