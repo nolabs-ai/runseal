@@ -242,7 +242,7 @@ mod tests {
             audit: crate::config::AuditConfig::Disabled,
         };
 
-        let args = fs_args(&config, &[trusted.clone()]).expect("fs args");
+        let args = fs_args(&config, std::slice::from_ref(&trusted)).expect("fs args");
         let matching = args.iter().filter(|(_, path)| path == &trusted).count();
 
         assert_eq!(matching, 1);
