@@ -1,5 +1,6 @@
 name: "Runseal"
 description: "Run commands with sealed credentials, L7 filtering, and nono sandbox enforcement"
+author: "Always Further"
 branding:
   icon: shield
   color: purple

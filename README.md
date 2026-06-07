@@ -42,7 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: always-further/runseal@v1
+      - uses: always-further/runseal@v0.3.1
         with:
           run: npm publish
           policy: |
@@ -160,7 +160,7 @@ still allowing L7 policy enforcement.
 ### Run Tests With No Network
 
 ```yaml
-- uses: always-further/runseal@v1
+- uses: always-further/runseal@v0.3.1
   with:
     run: npm test
     policy: |
@@ -174,7 +174,7 @@ still allowing L7 policy enforcement.
 ### Build With Package Registry Access
 
 ```yaml
-- uses: always-further/runseal@v1
+- uses: always-further/runseal@v0.3.1
   with:
     run: npm ci
     policy: |
@@ -190,7 +190,7 @@ still allowing L7 policy enforcement.
 ### Deploy With A Sealed Token
 
 ```yaml
-- uses: always-further/runseal@v1
+- uses: always-further/runseal@v0.3.1
   with:
     run: ./scripts/deploy.sh
     policy: |
@@ -229,7 +229,7 @@ still allowing L7 policy enforcement.
 Runseal can export the nono audit session for a sandboxed command:
 
 ```yaml
-- uses: always-further/runseal@v1
+- uses: always-further/runseal@v0.3.1
   with:
     run: npm rebuild
     audit: artifact
@@ -249,17 +249,6 @@ finishes and uploads a `runseal-audit` artifact containing:
 
 Audit export runs before Runseal returns the sandboxed command's exit status, so
 failed or denied commands can still produce audit evidence.
-
-## Supply Chain Verification
-
-The installer verifies release downloads in two layers:
-
-- SHA-256 checksum from the release `SHA256SUMS` file
-- GitHub artifact attestation proving the asset was built by the expected
-  repository and tag, for both `always-further/runseal` and `always-further/nono`
-
-Attestation verification uses `gh attestation verify` and is enabled by default.
-Set `verify-attestations: false` only for local testing or emergency fallback.
 
 ## Requirements
 
