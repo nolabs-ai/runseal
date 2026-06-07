@@ -50,10 +50,12 @@ jobs:
           (cd dist && sha256sum "${asset}" > SHA256SUMS)
           echo "asset=dist/${asset}" >> "${GITHUB_OUTPUT}"
 
-      - name: Attest release asset
+      - name: Attest release assets
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
         with:
-          subject-path: ${{ steps.package.outputs.asset }}
+          subject-path: |
+            ${{ steps.package.outputs.asset }}
+            dist/SHA256SUMS
 
       - name: Upload release assets
         env:
