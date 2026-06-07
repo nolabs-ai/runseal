@@ -42,7 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: always-further/runseal@v0.3.1
+      - uses: always-further/runseal@v0.3.2
         with:
           run: npm publish
           policy: |
@@ -160,7 +160,7 @@ still allowing L7 policy enforcement.
 ### Run Tests With No Network
 
 ```yaml
-- uses: always-further/runseal@v0.3.1
+- uses: always-further/runseal@v0.3.2
   with:
     run: npm test
     policy: |
@@ -174,7 +174,7 @@ still allowing L7 policy enforcement.
 ### Build With Package Registry Access
 
 ```yaml
-- uses: always-further/runseal@v0.3.1
+- uses: always-further/runseal@v0.3.2
   with:
     run: npm ci
     policy: |
@@ -190,7 +190,7 @@ still allowing L7 policy enforcement.
 ### Deploy With A Sealed Token
 
 ```yaml
-- uses: always-further/runseal@v0.3.1
+- uses: always-further/runseal@v0.3.2
   with:
     run: ./scripts/deploy.sh
     policy: |
@@ -229,7 +229,7 @@ still allowing L7 policy enforcement.
 Runseal can export the nono audit session for a sandboxed command:
 
 ```yaml
-- uses: always-further/runseal@v0.3.1
+- uses: always-further/runseal@v0.3.2
   with:
     run: npm rebuild
     audit: artifact

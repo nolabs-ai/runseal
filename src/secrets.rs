@@ -79,6 +79,10 @@ pub fn seal_credentials(config: &RunConfig) -> Result<SealedCredentials> {
 fn read_secret_env(secret_env: &str) -> Result<String> {
     let value = env::var_os(secret_env)
         .with_context(|| format!("access secret env var '{secret_env}' is not set"))?;
+    decode_secret_env_value(secret_env, value)
+}
+
+fn decode_secret_env_value(secret_env: &str, value: std::ffi::OsString) -> Result<String> {
     match value.into_string() {
         Ok(value) => Ok(value),
         Err(_) => bail!("access secret env var '{secret_env}' is not valid UTF-8"),
@@ -186,10 +190,8 @@ mod tests {
     fn non_utf8_secret_error_does_not_include_raw_value() {
         let name = "RUNSEAL_TEST_NON_UTF8_SECRET";
         let value = OsString::from_vec(b"TOPSECRET-\xFF\xFE-RAWKEY".to_vec());
-        env::set_var(name, &value);
 
-        let err = read_secret_env(name).expect_err("non-UTF-8 secret must fail");
-        env::remove_var(name);
+        let err = decode_secret_env_value(name, value).expect_err("non-UTF-8 secret must fail");
 
         let rendered = format!("{err:#}");
         assert!(
