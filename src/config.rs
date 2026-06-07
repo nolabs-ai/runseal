@@ -2,6 +2,8 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::env;
 
+const MAX_POLICY_YAML_BYTES: usize = 64 * 1024;
+
 #[derive(Debug, Clone)]
 pub struct RunConfig {
     pub command: String,
@@ -107,8 +109,7 @@ impl RunConfig {
             .context("RUNSEAL_RUN is required")?;
 
         if let Some(policy_yaml) = env_value("RUNSEAL_POLICY") {
-            let policy: PolicyInput = serde_yaml::from_str(&policy_yaml)
-                .context("RUNSEAL_POLICY is not valid runseal policy YAML")?;
+            let policy = parse_policy_yaml(&policy_yaml)?;
             return Self::from_policy(command, policy);
         }
 
@@ -182,6 +183,18 @@ impl RunConfig {
             )?,
         })
     }
+}
+
+fn parse_policy_yaml(policy_yaml: &str) -> Result<PolicyInput> {
+    if policy_yaml.len() > MAX_POLICY_YAML_BYTES {
+        bail!(
+            "RUNSEAL_POLICY is too large ({} bytes); maximum is {} bytes",
+            policy_yaml.len(),
+            MAX_POLICY_YAML_BYTES
+        );
+    }
+
+    serde_yaml_ng::from_str(policy_yaml).context("RUNSEAL_POLICY is not valid runseal policy YAML")
 }
 
 fn env_value(name: &str) -> Option<String> {
@@ -258,7 +271,7 @@ mod tests {
 
     #[test]
     fn access_grant_without_allow_rules_fails_closed() {
-        let policy: PolicyInput = serde_yaml::from_str(
+        let policy = parse_policy_yaml(
             r#"
 access:
   cratesio:
@@ -280,7 +293,7 @@ access:
 
     #[test]
     fn access_grant_with_empty_allow_rules_fails_closed() {
-        let policy: PolicyInput = serde_yaml::from_str(
+        let policy = parse_policy_yaml(
             r#"
 access:
   cratesio:
@@ -303,7 +316,7 @@ access:
 
     #[test]
     fn access_grant_with_allow_rules_parses() {
-        let policy: PolicyInput = serde_yaml::from_str(
+        let policy = parse_policy_yaml(
             r#"
 access:
   cratesio:
@@ -321,5 +334,17 @@ access:
         assert_eq!(config.access[0].endpoint_rules.len(), 1);
         assert_eq!(config.access[0].endpoint_rules[0].method, "GET");
         assert_eq!(config.access[0].endpoint_rules[0].path, "/api/v1/crates");
+    }
+
+    #[test]
+    fn policy_yaml_over_size_limit_fails_before_parsing() {
+        let yaml = " ".repeat(MAX_POLICY_YAML_BYTES + 1);
+
+        let err = parse_policy_yaml(&yaml).expect_err("oversized policy must fail");
+
+        assert!(
+            err.to_string().contains("RUNSEAL_POLICY is too large"),
+            "unexpected error: {err:#}"
+        );
     }
 }
