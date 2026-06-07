@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::fs;
@@ -67,6 +67,7 @@ pub fn export_sessions(export: &AuditExport, output_dir: &Path) -> Result<()> {
     }
 
     for session in &export.sessions {
+        validate_session_id(session)?;
         let json = Command::new("nono")
             .arg("audit")
             .arg("show")
@@ -143,16 +144,31 @@ fn parse_audit_list_json(output: &str) -> Result<Vec<String>> {
 
     let entries: Vec<AuditListEntry> =
         serde_json::from_str(output).context("failed to parse nono audit list --json output")?;
-    Ok(entries
-        .into_iter()
-        .map(|entry| entry.session_id)
-        .filter(|session| !session.trim().is_empty())
-        .collect())
+    let mut sessions = Vec::new();
+    for entry in entries {
+        if entry.session_id.trim().is_empty() {
+            continue;
+        }
+        validate_session_id(&entry.session_id)?;
+        sessions.push(entry.session_id);
+    }
+    Ok(sessions)
 }
 
 fn parse_session_id(line: &str) -> Option<&str> {
     line.split_whitespace()
-        .find(|part| part.chars().all(|ch| ch.is_ascii_digit() || ch == '-'))
+        .find(|part| is_valid_session_id(part))
+}
+
+fn validate_session_id(session: &str) -> Result<()> {
+    if !is_valid_session_id(session) {
+        bail!("nono audit session id '{session}' is invalid");
+    }
+    Ok(())
+}
+
+fn is_valid_session_id(session: &str) -> bool {
+    !session.is_empty() && session.chars().all(|ch| ch.is_ascii_digit() || ch == '-')
 }
 
 #[cfg(test)]
@@ -194,6 +210,62 @@ mod tests {
         assert_eq!(
             sessions,
             vec!["20260606-184133-1234", "20260606-184200-5678"]
+        );
+    }
+
+    #[test]
+    fn rejects_traversal_session_ids_from_json_list() {
+        let err = parse_audit_list_json(
+            r#"[
+              {
+                "session_id": "../../../../tmp/evil",
+                "command": "true"
+              }
+            ]"#,
+        )
+        .expect_err("traversal session id must fail");
+
+        assert!(
+            err.to_string().contains("session id"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn rejects_absolute_session_ids_from_json_list() {
+        let err = parse_audit_list_json(
+            r#"[
+              {
+                "session_id": "/tmp/evil",
+                "command": "true"
+              }
+            ]"#,
+        )
+        .expect_err("absolute session id must fail");
+
+        assert!(
+            err.to_string().contains("session id"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn export_rejects_invalid_session_ids_before_writing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let export = AuditExport {
+            sessions: vec!["../../evil".to_string()],
+            used_latest_fallback: false,
+        };
+
+        let err = export_sessions(&export, dir.path()).expect_err("invalid session id must fail");
+
+        assert!(
+            err.to_string().contains("session id"),
+            "unexpected error: {err:#}"
+        );
+        assert!(
+            !dir.path().join("evil.error.txt").exists(),
+            "invalid session id must not be written"
         );
     }
 
