@@ -46,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: always-further/runseal@v0.3.2
+      - uses: always-further/runseal@v0.3.3
         with:
           run: npm publish
           policy: |
