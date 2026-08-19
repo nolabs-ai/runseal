@@ -260,7 +260,7 @@ fn parse_network(value: Option<&str>) -> NetworkPolicy {
 }
 
 fn parse_audit(value: Option<&str>, dir: Option<&str>) -> Result<AuditConfig> {
-    match value.unwrap_or("false").trim() {
+    match value.unwrap_or_default().trim() {
         "" | "false" | "off" | "none" => Ok(AuditConfig::Disabled),
         "true" | "artifact" => {
             let dir = dir
@@ -270,7 +270,9 @@ fn parse_audit(value: Option<&str>, dir: Option<&str>) -> Result<AuditConfig> {
                 dir: dir.to_string(),
             })
         }
-        value => bail!("unsupported audit mode '{value}'; expected 'false' or 'artifact'"),
+        value => bail!(
+            "unsupported audit mode '{value}'; expected one of 'false', 'off', 'none', 'true', 'artifact'"
+        ),
     }
 }
 
@@ -374,6 +376,56 @@ access:
         assert_eq!(config.access[0].endpoint_rules.len(), 1);
         assert_eq!(config.access[0].endpoint_rules[0].method, "GET");
         assert_eq!(config.access[0].endpoint_rules[0].path, "/api/v1/crates");
+    }
+
+    #[test]
+    fn audit_mode_aliases_parse() {
+        for value in ["", "false", "off", "none", " false "] {
+            assert_eq!(
+                parse_audit(Some(value), None).expect("disabled alias"),
+                AuditConfig::Disabled,
+                "value {value:?}"
+            );
+        }
+        assert_eq!(
+            parse_audit(None, None).expect("unset"),
+            AuditConfig::Disabled
+        );
+        for value in ["true", "artifact"] {
+            assert_eq!(
+                parse_audit(Some(value), None).expect("artifact alias"),
+                AuditConfig::Artifact {
+                    dir: "runseal-audit".to_string()
+                },
+                "value {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn audit_artifact_uses_configured_dir() {
+        assert_eq!(
+            parse_audit(Some("artifact"), Some("/tmp/audit")).expect("artifact"),
+            AuditConfig::Artifact {
+                dir: "/tmp/audit".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn unknown_network_mode_fails_to_parse() {
+        let err = parse_policy_yaml(
+            r#"
+network:
+  mode: open
+"#,
+        )
+        .expect_err("unknown network mode must fail");
+
+        assert!(
+            format!("{err:#}").contains("not valid runseal policy YAML"),
+            "unexpected error: {err:#}"
+        );
     }
 
     #[test]
@@ -513,7 +565,6 @@ access:
         );
     }
 
-    #[test]
     #[test]
     fn unsupported_inject_mode_fails_closed() {
         let policy = parse_policy_yaml(
