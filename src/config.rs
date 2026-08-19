@@ -20,6 +20,13 @@ pub enum NetworkPolicy {
     AllowDomains(Vec<String>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum NetworkMode {
+    Blocked,
+    Filtered,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuditConfig {
     Disabled,
@@ -92,10 +99,22 @@ struct FsInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NetworkInput {
-    #[serde(default = "default_blocked")]
-    mode: String,
+    #[serde(default, deserialize_with = "explicit_network_mode")]
+    mode: Option<NetworkMode>,
     #[serde(default)]
     allow: Vec<String>,
+}
+
+/// An omitted `mode` key means "infer from the allow list", but a present key
+/// must carry a real mode: an explicit null (`mode:` / `mode: ~`) is rejected
+/// rather than silently aliased to the omitted case.
+fn explicit_network_mode<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<NetworkMode>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    NetworkMode::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Deserialize)]
@@ -118,9 +137,6 @@ struct InjectInput {
     mode: InjectMode,
 }
 
-fn default_blocked() -> String {
-    "blocked".to_string()
-}
 impl RunConfig {
     pub fn from_action_env() -> Result<Self> {
         let command = env_value("RUNSEAL_RUN")
@@ -164,19 +180,15 @@ impl RunConfig {
     fn from_policy(command: String, policy: PolicyInput) -> Result<Self> {
         let (fs_read, fs_write) = policy.fs.map(|fs| (fs.read, fs.write)).unwrap_or_default();
         let network = match policy.network {
-            Some(network)
-                if matches!(network.mode.as_str(), "blocked" | "filtered")
-                    && network.allow.is_empty() =>
-            {
-                NetworkPolicy::Blocked
-            }
-            Some(network) if matches!(network.mode.as_str(), "blocked" | "filtered") => {
-                NetworkPolicy::AllowDomains(network.allow)
-            }
-            Some(network) => bail!(
-                "unsupported network.mode '{}'; expected 'blocked' or 'filtered'",
-                network.mode
-            ),
+            Some(network) if network.allow.is_empty() => NetworkPolicy::Blocked,
+            Some(network) => match network.mode {
+                Some(NetworkMode::Blocked) => bail!(
+                    "network.mode 'blocked' cannot be combined with network.allow; use mode 'filtered' or remove the allow list"
+                ),
+                // An allow list without an explicit mode has always meant a
+                // domain allowlist; only a stated 'blocked' contradicts it.
+                Some(NetworkMode::Filtered) | None => NetworkPolicy::AllowDomains(network.allow),
+            },
             None => NetworkPolicy::Blocked,
         };
         let mut access = Vec::new();
@@ -362,6 +374,97 @@ access:
         assert_eq!(config.access[0].endpoint_rules.len(), 1);
         assert_eq!(config.access[0].endpoint_rules[0].method, "GET");
         assert_eq!(config.access[0].endpoint_rules[0].path, "/api/v1/crates");
+    }
+
+    #[test]
+    fn explicit_null_network_mode_fails_to_parse() {
+        for policy in [
+            "network:\n  mode:\n  allow:\n    - api.github.com\n",
+            "network:\n  mode: ~\n  allow:\n    - api.github.com\n",
+        ] {
+            let err = parse_policy_yaml(policy).expect_err("null network mode must fail");
+
+            assert!(
+                format!("{err:#}").contains("not valid runseal policy YAML"),
+                "unexpected error: {err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn blocked_network_mode_with_allow_list_fails_closed() {
+        let policy = parse_policy_yaml(
+            r#"
+network:
+  mode: blocked
+  allow:
+    - api.github.com
+"#,
+        )
+        .expect("policy yaml");
+
+        let err = RunConfig::from_policy("true".to_string(), policy)
+            .expect_err("blocked mode with allow list must fail");
+
+        assert!(
+            err.to_string()
+                .contains("network.mode 'blocked' cannot be combined with network.allow"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn filtered_network_mode_with_allow_list_allows_domains() {
+        let policy = parse_policy_yaml(
+            r#"
+network:
+  mode: filtered
+  allow:
+    - api.github.com
+"#,
+        )
+        .expect("policy yaml");
+
+        let config = RunConfig::from_policy("true".to_string(), policy).expect("policy parses");
+
+        assert_eq!(
+            config.network,
+            NetworkPolicy::AllowDomains(vec!["api.github.com".to_string()])
+        );
+    }
+
+    #[test]
+    fn allow_list_without_mode_allows_domains() {
+        let policy = parse_policy_yaml(
+            r#"
+network:
+  allow:
+    - api.github.com
+"#,
+        )
+        .expect("policy yaml");
+
+        let config = RunConfig::from_policy("true".to_string(), policy).expect("policy parses");
+
+        assert_eq!(
+            config.network,
+            NetworkPolicy::AllowDomains(vec!["api.github.com".to_string()])
+        );
+    }
+
+    #[test]
+    fn filtered_network_mode_without_allow_list_blocks_network() {
+        let policy = parse_policy_yaml(
+            r#"
+network:
+  mode: filtered
+"#,
+        )
+        .expect("policy yaml");
+
+        let config = RunConfig::from_policy("true".to_string(), policy).expect("policy parses");
+
+        assert_eq!(config.network, NetworkPolicy::Blocked);
     }
 
     #[test]

@@ -114,6 +114,8 @@ Runseal expects `network.mode: blocked` or `network.mode: filtered`.
 
 Add `network.allow` only for unauthenticated hosts the command must reach. Hosts
 used by access grants are added to the generated `nono` profile automatically.
+A `network.allow` list implies `mode: filtered` when `mode` is omitted;
+combining it with an explicit `mode: blocked` is a configuration error.
 
 ```yaml
 network:
