@@ -244,7 +244,7 @@ still allowing L7 policy enforcement.
 | `policy` | No | empty | Runseal policy YAML. Prefer this for new workflows. |
 | `fs-read` | No | empty | Comma-separated read paths when `policy` is not set. |
 | `fs-write` | No | empty | Comma-separated write paths when `policy` is not set. |
-| `network` | No | `blocked` | Network policy when `policy` is not set: `blocked` or comma-separated domains. |
+| `network` | No | `blocked` | Network policy when `policy` is not set: `blocked` or comma-separated domains. `filtered` is only valid as `network.mode` inside `policy` and is rejected here. |
 | `runseal-version` | No | `0.3.1` | Runseal release version to install. Accepts `v0.1.0` or `0.1.0`. |
 | `nono-version` | No | `0.62.0` | nono release version to install. Accepts `v0.1.0` or `0.1.0`. |
 | `verify-attestations` | No | `true` | Verify GitHub artifact attestations for downloaded release assets. |

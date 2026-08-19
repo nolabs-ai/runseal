@@ -162,7 +162,7 @@ impl RunConfig {
             env_value("RUNSEAL_NETWORK")
                 .or_else(|| env_value("NONO_ACTION_NETWORK"))
                 .as_deref(),
-        );
+        )?;
         let audit = parse_audit(
             env_value("RUNSEAL_AUDIT").as_deref(),
             env_value("RUNSEAL_AUDIT_DIR").as_deref(),
@@ -187,7 +187,9 @@ impl RunConfig {
                 ),
                 // An allow list without an explicit mode has always meant a
                 // domain allowlist; only a stated 'blocked' contradicts it.
-                Some(NetworkMode::Filtered) | None => NetworkPolicy::AllowDomains(network.allow),
+                Some(NetworkMode::Filtered) | None => {
+                    NetworkPolicy::AllowDomains(validate_domain_allowlist(network.allow)?)
+                }
             },
             None => NetworkPolicy::Blocked,
         };
@@ -250,12 +252,44 @@ fn split_csv(value: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-fn parse_network(value: Option<&str>) -> NetworkPolicy {
-    let raw = value.unwrap_or("blocked").trim();
-    if raw.is_empty() || raw == "blocked" {
-        NetworkPolicy::Blocked
-    } else {
-        NetworkPolicy::AllowDomains(split_csv(Some(raw)))
+fn is_network_mode_keyword(value: &str) -> bool {
+    value.eq_ignore_ascii_case("blocked") || value.eq_ignore_ascii_case("filtered")
+}
+
+/// Trims and rejects entries that cannot be domains.
+fn validate_domain_allowlist(domains: Vec<String>) -> Result<Vec<String>> {
+    let domains: Vec<String> = domains
+        .into_iter()
+        .map(|domain| domain.trim().to_string())
+        .collect();
+    for domain in &domains {
+        if domain.is_empty() {
+            bail!("network.allow entries must not be empty");
+        }
+        if is_network_mode_keyword(domain) {
+            bail!(
+                "network.allow entry '{domain}' is not a domain; 'blocked' and 'filtered' belong in network.mode"
+            );
+        }
+    }
+    Ok(domains)
+}
+
+fn parse_network(value: Option<&str>) -> Result<NetworkPolicy> {
+    let domains = split_csv(value);
+    match domains.as_slice() {
+        [] => Ok(NetworkPolicy::Blocked),
+        [only] if only.eq_ignore_ascii_case("blocked") => Ok(NetworkPolicy::Blocked),
+        _ => {
+            for domain in &domains {
+                if is_network_mode_keyword(domain) {
+                    bail!(
+                        "network value '{domain}' is not a domain; set RUNSEAL_NETWORK to 'blocked' or a comma-separated domain allowlist (network.mode 'filtered' belongs in policy YAML)"
+                    );
+                }
+            }
+            Ok(NetworkPolicy::AllowDomains(domains))
+        }
     }
 }
 
@@ -379,6 +413,55 @@ access:
     }
 
     #[test]
+    fn network_env_blocked_or_unset_blocks_network() {
+        for value in [
+            None,
+            Some(""),
+            Some("blocked"),
+            Some(" blocked "),
+            Some("Blocked"),
+            Some("BLOCKED"),
+            Some("blocked,"),
+        ] {
+            assert_eq!(
+                parse_network(value).expect("blocked network"),
+                NetworkPolicy::Blocked,
+                "value {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn network_env_domain_list_allows_domains() {
+        assert_eq!(
+            parse_network(Some("a.com, b.com")).expect("domain list"),
+            NetworkPolicy::AllowDomains(vec!["a.com".to_string(), "b.com".to_string()])
+        );
+    }
+
+    #[test]
+    fn network_env_rejects_mode_keywords_as_domains() {
+        for value in [
+            "filtered",
+            "Filtered",
+            "FILTERED",
+            "a.com,blocked",
+            "a.com,Blocked",
+            "a.com,BLOCKED",
+            "a.com, filtered",
+            "a.com, FILTERED",
+        ] {
+            let err =
+                parse_network(Some(value)).expect_err("mode keyword must not become a domain");
+
+            assert!(
+                err.to_string().contains("is not a domain"),
+                "unexpected error for {value:?}: {err:#}"
+            );
+        }
+    }
+
+    #[test]
     fn audit_mode_aliases_parse() {
         for value in ["", "false", "off", "none", " false "] {
             assert_eq!(
@@ -441,6 +524,46 @@ network:
                 "unexpected error: {err:#}"
             );
         }
+    }
+
+    #[test]
+    fn policy_allow_list_rejects_mode_keywords_and_blank_entries() {
+        for (entry, expected) in [
+            ("blocked", "is not a domain"),
+            ("Filtered", "is not a domain"),
+            ("''", "must not be empty"),
+            ("'  '", "must not be empty"),
+        ] {
+            let policy = parse_policy_yaml(&format!("network:\n  allow:\n    - {entry}\n"))
+                .expect("policy yaml");
+
+            let err = RunConfig::from_policy("true".to_string(), policy)
+                .expect_err("non-domain allow entry must fail");
+
+            assert!(
+                err.to_string().contains(expected),
+                "unexpected error for {entry:?}: {err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn policy_allow_list_entries_are_trimmed() {
+        let policy = parse_policy_yaml(
+            r#"
+network:
+  allow:
+    - "  api.github.com  "
+"#,
+        )
+        .expect("policy yaml");
+
+        let config = RunConfig::from_policy("true".to_string(), policy).expect("policy parses");
+
+        assert_eq!(
+            config.network,
+            NetworkPolicy::AllowDomains(vec!["api.github.com".to_string()])
+        );
     }
 
     #[test]
