@@ -73,10 +73,39 @@ pub struct AccessConfig {
     pub endpoint_rules: Vec<EndpointRule>,
 }
 
-#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct EndpointRule {
-    pub method: String,
+    pub method: HttpMethod,
     pub path: String,
+}
+
+/// An HTTP method in nono's wire format: an uppercased RFC 7230 method token
+/// or the '*' wildcard. nono accepts arbitrary method strings (TRACE, CONNECT,
+/// WebDAV verbs, ...).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(transparent)]
+pub struct HttpMethod(String);
+
+impl std::str::FromStr for HttpMethod {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        // The wildcard is only meaningful to nono as the exact string "*", so
+        // '*' is rejected inside longer tokens ("**", "GET*") even though RFC
+        // 7230 technically  allows it, as these rules would silently never
+        // match any request.
+        if value == "*" {
+            return Ok(Self("*".to_string()));
+        }
+        let is_token = !value.is_empty()
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'+-.^_`|~".contains(&byte));
+        if !is_token {
+            bail!("invalid HTTP method '{value}'; expected a method token like GET, or '*'");
+        }
+        Ok(Self(value.to_ascii_uppercase()))
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -332,8 +361,11 @@ fn parse_allow_rules(allow: &[String]) -> Result<Vec<EndpointRule>> {
             if method.is_empty() || path.is_empty() {
                 bail!("access allow rule '{rule}' must be formatted as 'METHOD /path'");
             }
+            let method = method
+                .parse::<HttpMethod>()
+                .with_context(|| format!("access allow rule '{rule}' has an unsupported method"))?;
             Ok(EndpointRule {
-                method: method.to_string(),
+                method,
                 path: path.to_string(),
             })
         })
@@ -343,6 +375,10 @@ fn parse_allow_rules(allow: &[String]) -> Result<Vec<EndpointRule>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn method(token: &str) -> HttpMethod {
+        token.parse().expect("method token")
+    }
 
     #[test]
     fn access_grant_without_allow_rules_fails_closed() {
@@ -408,8 +444,74 @@ access:
 
         assert_eq!(config.access.len(), 1);
         assert_eq!(config.access[0].endpoint_rules.len(), 1);
-        assert_eq!(config.access[0].endpoint_rules[0].method, "GET");
+        assert_eq!(config.access[0].endpoint_rules[0].method, method("GET"));
         assert_eq!(config.access[0].endpoint_rules[0].path, "/api/v1/crates");
+    }
+
+    #[test]
+    fn allow_rule_methods_parse_case_insensitively_with_wildcard() {
+        let rules = parse_allow_rules(&[
+            "get /a".to_string(),
+            "POST /b".to_string(),
+            "* /c".to_string(),
+        ])
+        .expect("allow rules parse");
+
+        assert_eq!(rules[0].method, method("GET"));
+        assert_eq!(rules[1].method, method("POST"));
+        assert_eq!(rules[2].method, method("*"));
+    }
+
+    #[test]
+    fn allow_rule_methods_accept_arbitrary_method_tokens() {
+        let rules = parse_allow_rules(&[
+            "TRACE /a".to_string(),
+            "connect /b".to_string(),
+            "PROPFIND /c".to_string(),
+            "version-control /d".to_string(),
+        ])
+        .expect("allow rules parse");
+
+        assert_eq!(rules[0].method, method("TRACE"));
+        assert_eq!(rules[1].method, method("CONNECT"));
+        assert_eq!(rules[2].method, method("PROPFIND"));
+        assert_eq!(rules[3].method, method("VERSION-CONTROL"));
+    }
+
+    #[test]
+    fn allow_rule_with_wildcard_inside_method_token_fails_closed() {
+        for method in ["**", "GET*", "*GET", "G*T"] {
+            let err = parse_allow_rules(&[format!("{method} /a")])
+                .expect_err("wildcard inside a method token must fail");
+
+            assert!(
+                format!("{err:#}").contains(&format!("invalid HTTP method '{method}'")),
+                "unexpected error: {err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn allow_rule_with_malformed_method_fails_closed() {
+        for method in ["GE/T", "GÉT", "GET;"] {
+            let err = parse_allow_rules(&[format!("{method} /a")])
+                .expect_err("malformed method must fail");
+
+            assert!(
+                format!("{err:#}").contains(&format!("invalid HTTP method '{method}'")),
+                "unexpected error: {err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn allow_rule_methods_serialize_as_uppercase_wire_strings() {
+        let rules =
+            parse_allow_rules(&["get /a".to_string(), "* /c".to_string()]).expect("rules parse");
+        let json = serde_json::to_string(&rules).expect("json");
+
+        assert!(json.contains(r#""method":"GET""#), "json: {json}");
+        assert!(json.contains(r#""method":"*""#), "json: {json}");
     }
 
     #[test]

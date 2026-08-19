@@ -31,6 +31,14 @@ access:
     let json = read_profile_json(&run.captured_profile);
 
     assert_eq!(json["network"]["block"], true);
+    assert_eq!(
+        json["network"]["custom_credentials"]["cratesio"]["endpoint_rules"][0]["method"],
+        "GET"
+    );
+    assert_eq!(
+        json["network"]["custom_credentials"]["cratesio"]["inject_mode"],
+        "header"
+    );
 }
 
 #[test]

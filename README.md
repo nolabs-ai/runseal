@@ -168,7 +168,8 @@ access:
 ### HTTPS Endpoint Filtering
 
 `allow` restricts access use by HTTP method and path. Matching is allow-list
-based.
+based. The method may be any HTTP method token (`GET`, `DELETE`, `PROPFIND`,
+...) or the wildcard `*`; methods are uppercased before matching.
 
 ```yaml
 allow:
