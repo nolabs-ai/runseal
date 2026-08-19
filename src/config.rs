@@ -26,13 +26,43 @@ pub enum AuditConfig {
     Artifact { dir: String },
 }
 
+/// Secret injection modes in nono's wire format
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum InjectMode {
+    #[default]
+    Header,
+    UrlPath,
+    QueryParam,
+    BasicAuth,
+}
+
+impl InjectMode {
+    fn wire_name(self) -> &'static str {
+        match self {
+            InjectMode::Header => "header",
+            InjectMode::UrlPath => "url_path",
+            InjectMode::QueryParam => "query_param",
+            InjectMode::BasicAuth => "basic_auth",
+        }
+    }
+}
+
+/// The inject modes runseal can emit a complete nono credential entry for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SupportedInjectMode {
+    Header,
+    BasicAuth,
+}
+
 #[derive(Debug, Clone)]
 pub struct AccessConfig {
     pub name: String,
     pub secret: String,
     pub upstream: String,
     pub tls_ca: Option<String>,
-    pub inject_mode: String,
+    pub inject_mode: SupportedInjectMode,
     pub endpoint_rules: Vec<EndpointRule>,
 }
 
@@ -81,26 +111,15 @@ struct AccessInput {
     allow: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct InjectInput {
-    #[serde(default = "default_header_mode")]
-    mode: String,
-}
-
-impl Default for InjectInput {
-    fn default() -> Self {
-        Self {
-            mode: default_header_mode(),
-        }
-    }
+    #[serde(default)]
+    mode: InjectMode,
 }
 
 fn default_blocked() -> String {
     "blocked".to_string()
-}
-fn default_header_mode() -> String {
-    "header".to_string()
 }
 impl RunConfig {
     pub fn from_action_env() -> Result<Self> {
@@ -162,12 +181,20 @@ impl RunConfig {
         };
         let mut access = Vec::new();
         for (name, grant) in policy.access.unwrap_or_default() {
+            let inject_mode = match grant.inject.mode {
+                InjectMode::Header => SupportedInjectMode::Header,
+                InjectMode::BasicAuth => SupportedInjectMode::BasicAuth,
+                mode @ (InjectMode::UrlPath | InjectMode::QueryParam) => bail!(
+                    "access grant '{name}' uses inject.mode '{}', which is not yet supported by runseal; use 'header' or 'basic_auth'",
+                    mode.wire_name()
+                ),
+            };
             access.push(AccessConfig {
                 name,
                 secret: grant.secret,
                 upstream: validate_url(&grant.url)?,
                 tls_ca: grant.tls_ca,
-                inject_mode: grant.inject.mode,
+                inject_mode,
                 endpoint_rules: parse_allow_rules(&grant.allow)?,
             });
         }
@@ -279,7 +306,7 @@ access:
     url: https://crates.io
 "#,
         )
-        .expect("policy yaml");
+        .expect("Valid policy yaml");
 
         let err = RunConfig::from_policy("true".to_string(), policy)
             .expect_err("missing allow rules must fail");
@@ -302,7 +329,7 @@ access:
     allow: []
 "#,
         )
-        .expect("policy yaml");
+        .expect("Valid policy yaml");
 
         let err = RunConfig::from_policy("true".to_string(), policy)
             .expect_err("empty allow rules must fail");
@@ -326,14 +353,88 @@ access:
       - GET /api/v1/crates
 "#,
         )
-        .expect("policy yaml");
+        .expect("Valid policy yaml");
 
-        let config = RunConfig::from_policy("true".to_string(), policy).expect("policy parses");
+        let config = RunConfig::from_policy("true".to_string(), policy)
+            .expect("Policy should parse correctly");
 
         assert_eq!(config.access.len(), 1);
         assert_eq!(config.access[0].endpoint_rules.len(), 1);
         assert_eq!(config.access[0].endpoint_rules[0].method, "GET");
         assert_eq!(config.access[0].endpoint_rules[0].path, "/api/v1/crates");
+    }
+
+    #[test]
+    fn access_grant_defaults_to_header_inject_mode() {
+        let policy = parse_policy_yaml(
+            r#"
+access:
+  cratesio:
+    secret: CARGO_REGISTRY_TOKEN
+    url: https://crates.io
+    allow:
+      - GET /api/v1/crates
+"#,
+        )
+        .expect("Valid policy yaml");
+
+        let config = RunConfig::from_policy("true".to_string(), policy)
+            .expect("Policy should parse correctly");
+
+        assert_eq!(config.access[0].inject_mode, SupportedInjectMode::Header);
+    }
+
+    #[test]
+    fn basic_auth_inject_mode_maps_and_serializes_as_snake_case() {
+        let policy = parse_policy_yaml(
+            r#"
+access:
+  cratesio:
+    secret: CARGO_REGISTRY_TOKEN
+    url: https://crates.io
+    inject:
+      mode: basic_auth
+    allow:
+      - GET /api/v1/crates
+"#,
+        )
+        .expect("Valid policy yaml");
+
+        let config = RunConfig::from_policy("true".to_string(), policy)
+            .expect("Policy should parse correctly");
+
+        assert_eq!(config.access[0].inject_mode, SupportedInjectMode::BasicAuth);
+        assert_eq!(
+            serde_json::to_string(&config.access[0].inject_mode).expect("Valid json"),
+            r#""basic_auth""#
+        );
+    }
+
+    #[test]
+    #[test]
+    fn unsupported_inject_mode_fails_closed() {
+        let policy = parse_policy_yaml(
+            r#"
+access:
+  cratesio:
+    secret: CARGO_REGISTRY_TOKEN
+    url: https://crates.io
+    inject:
+      mode: url_path
+    allow:
+      - GET /api/v1/crates
+"#,
+        )
+        .expect("Valid policy yaml");
+
+        let err = RunConfig::from_policy("true".to_string(), policy)
+            .expect_err("unsupported inject mode must fail");
+
+        assert!(
+            err.to_string()
+                .contains("inject.mode 'url_path', which is not yet supported"),
+            "unexpected error: {err:#}"
+        );
     }
 
     #[test]

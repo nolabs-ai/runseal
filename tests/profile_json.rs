@@ -91,6 +91,37 @@ access:
     );
 }
 
+#[test]
+fn invalid_inject_mode_fails_before_spawning_nono() {
+    let policy = r#"
+network:
+  mode: blocked
+access:
+  cratesio:
+    secret: CARGO_REGISTRY_TOKEN
+    url: https://crates.io
+    inject:
+      mode: heder
+    allow:
+      - GET /api/v1/crates
+"#;
+    let run = run_with_fake_nono(policy);
+
+    assert!(
+        !run.output.status.success(),
+        "runseal must reject an invalid inject mode"
+    );
+    assert!(
+        !run.captured_args.exists(),
+        "nono must not be spawned when the policy is invalid"
+    );
+    let stderr = String::from_utf8_lossy(&run.output.stderr);
+    assert!(
+        stderr.contains("not valid runseal policy YAML"),
+        "unexpected stderr:\n{stderr}"
+    );
+}
+
 struct FakeNonoRun {
     output: std::process::Output,
     captured_profile: PathBuf,

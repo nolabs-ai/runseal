@@ -1,4 +1,4 @@
-use crate::config::RunConfig;
+use crate::config::{RunConfig, SupportedInjectMode};
 use anyhow::{bail, Context, Result};
 use std::collections::{BTreeMap, HashSet};
 use std::env;
@@ -19,7 +19,7 @@ pub struct SealedCredential {
     pub secret_env: String,
     pub upstream: String,
     pub tls_ca: Option<String>,
-    pub inject_mode: String,
+    pub inject_mode: SupportedInjectMode,
     pub credential_file: std::path::PathBuf,
     pub endpoint_rules: Vec<crate::config::EndpointRule>,
 }
@@ -50,7 +50,7 @@ pub fn seal_credentials(config: &RunConfig) -> Result<SealedCredentials> {
         if secret.is_empty() {
             bail!("access secret env var '{}' is empty", grant.secret);
         }
-        validate_secret_for_inject_mode(&grant.secret, &grant.inject_mode, &secret)?;
+        validate_secret_for_inject_mode(&grant.secret, grant.inject_mode, &secret)?;
         emit_secret_masks(&secret);
 
         let name = grant.name.clone();
@@ -63,7 +63,7 @@ pub fn seal_credentials(config: &RunConfig) -> Result<SealedCredentials> {
             secret_env: grant.secret.clone(),
             upstream: grant.upstream.clone(),
             tls_ca: grant.tls_ca.clone(),
-            inject_mode: grant.inject_mode.clone(),
+            inject_mode: grant.inject_mode,
             credential_file: path,
             endpoint_rules: grant.endpoint_rules.clone(),
         });
@@ -107,10 +107,16 @@ fn validate_access_grant_name(name: &str) -> Result<()> {
 
 fn validate_secret_for_inject_mode(
     secret_env: &str,
-    inject_mode: &str,
+    inject_mode: SupportedInjectMode,
     secret: &str,
 ) -> Result<()> {
-    if inject_mode == "header" && secret.contains(['\r', '\n']) {
+    let secret_lands_in_header_verbatim = match inject_mode {
+        SupportedInjectMode::Header => true,
+        // nono base64-encodes basic_auth secrets, so a newline never reaches
+        // the header.
+        SupportedInjectMode::BasicAuth => false,
+    };
+    if secret_lands_in_header_verbatim && secret.contains(['\r', '\n']) {
         bail!(
             "access secret env var '{secret_env}' contains a newline, which cannot be injected as an HTTP header"
         );
@@ -131,7 +137,7 @@ fn secret_mask_lines(secret: &str) -> impl Iterator<Item = &str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AccessConfig, AuditConfig, NetworkPolicy};
+    use crate::config::{AccessConfig, AuditConfig, NetworkPolicy, SupportedInjectMode};
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
 
@@ -173,7 +179,7 @@ mod tests {
                 secret: "RUNSEAL_TEST_SECRET_THAT_IS_NOT_SET".to_string(),
                 upstream: "https://crates.io".to_string(),
                 tls_ca: None,
-                inject_mode: "header".to_string(),
+                inject_mode: SupportedInjectMode::Header,
                 endpoint_rules: Vec::new(),
             }],
             audit: AuditConfig::Disabled,
@@ -217,8 +223,12 @@ mod tests {
 
     #[test]
     fn header_injection_rejects_newline_secrets() {
-        let err = validate_secret_for_inject_mode("RUNSEAL_TEST_SECRET", "header", "first\nsecond")
-            .expect_err("header secrets with newlines must fail");
+        let err = validate_secret_for_inject_mode(
+            "RUNSEAL_TEST_SECRET",
+            SupportedInjectMode::Header,
+            "first\nsecond",
+        )
+        .expect_err("header secrets with newlines must fail");
 
         assert!(
             err.to_string()
@@ -228,8 +238,12 @@ mod tests {
     }
 
     #[test]
-    fn non_header_injection_allows_newline_secrets() {
-        validate_secret_for_inject_mode("RUNSEAL_TEST_SECRET", "body", "first\nsecond")
-            .expect("non-header multiline secret");
+    fn basic_auth_injection_allows_newline_secrets() {
+        validate_secret_for_inject_mode(
+            "RUNSEAL_TEST_SECRET",
+            SupportedInjectMode::BasicAuth,
+            "first\nsecond",
+        )
+        .expect("basic_auth multiline secret");
     }
 }

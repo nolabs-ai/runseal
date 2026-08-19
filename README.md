@@ -143,6 +143,26 @@ The sandboxed command receives a phantom credential for SDK compatibility. The
 real secret remains outside the sandbox and is only inserted by the proxy when
 the host and endpoint policy match.
 
+`inject.mode` selects how the proxy injects the secret:
+
+| Mode | Status | Behavior |
+| --- | --- | --- |
+| `header` | Default | Injected as an `Authorization: Bearer` header. |
+| `basic_auth` | Supported | Injected as HTTP basic auth credentials. |
+| `url_path` | Reserved | Rejected; runseal does not emit the required `path_pattern` yet. |
+| `query_param` | Reserved | Rejected; runseal does not emit the required `query_param_name` yet. |
+
+```yaml
+access:
+  fly:
+    secret: FLY_API_TOKEN
+    url: https://api.machines.dev
+    inject:
+      mode: header
+    allow:
+      - POST /v1/apps/*/machines
+```
+
 ### HTTPS Endpoint Filtering
 
 `allow` restricts access use by HTTP method and path. Matching is allow-list
