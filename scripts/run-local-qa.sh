@@ -242,7 +242,11 @@ if (cd "${LAB}" && RUNSEAL_RUN='curl -fsS https://example.com' RUNSEAL_POLICY=$'
 if (cd "${LAB}" && RUNSEAL_RUN='curl -fsS https://example.com >/tmp/runseal-example.html' RUNSEAL_POLICY=$'fs:\n  read: ["."]\n  write: ["/tmp"]\nnetwork:\n  mode: filtered\n  allow:\n    - example.com\n' "${RUNSEAL_BIN}" run >/tmp/runseal-qa.out 2>&1) && [[ -s /tmp/runseal-example.html ]]; then pass "network allowlist"; else cat /tmp/runseal-qa.out; fail "network allowlist"; fi
 
 log "secret environment scenarios"
-if (cd "${LAB}" && API_TOKEN='real-secret-value' RUNSEAL_RUN='printf "API_TOKEN=<%s>\n" "$API_TOKEN"' RUNSEAL_POLICY=$'fs:\n  read: ["."]\n  write: []\nnetwork:\n  mode: filtered\naccess:\n  api:\n    secret: API_TOKEN\n    url: https://example.com\n    allow:\n      - GET /**\n' "${RUNSEAL_BIN}" run >/tmp/runseal-qa.out 2>&1) && grep -q 'API_TOKEN=<>' /tmp/runseal-qa.out; then pass "secret stripped from env"; else cat /tmp/runseal-qa.out; fail "secret stripped from env"; fi
+# The sandboxed command receives a phantom credential on the original env
+# var (for SDK compatibility, see README.md), not an empty value -- assert
+# the real secret never appears, matching the "http credential injection"
+# check below.
+if (cd "${LAB}" && API_TOKEN='real-secret-value' RUNSEAL_RUN='printf "API_TOKEN=<%s>\n" "$API_TOKEN"' RUNSEAL_POLICY=$'fs:\n  read: ["."]\n  write: []\nnetwork:\n  mode: filtered\naccess:\n  api:\n    secret: API_TOKEN\n    url: https://example.com\n    allow:\n      - GET /**\n' "${RUNSEAL_BIN}" run >/tmp/runseal-qa.out 2>&1) && ! grep -q 'API_TOKEN=<real-secret-value>' /tmp/runseal-qa.out; then pass "secret stripped from env"; else cat /tmp/runseal-qa.out; fail "secret stripped from env"; fi
 
 log "HTTP credential injection and L7 scenarios"
 start_http_server

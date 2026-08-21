@@ -105,6 +105,13 @@ pub fn build_profile(config: &RunConfig, sealed: &SealedCredentials) -> Result<N
         );
     }
 
+    // nono rejects `block: true` combined with any credential: credential
+    // injection needs the local proxy reachable, which a full network block
+    // also cuts off. When access grants are configured, `allow_domain` above
+    // already narrows direct/proxied access to just the credential upstream
+    // hosts, so leaving `block` false here doesn't widen access.
+    let block = matches!(config.network, NetworkPolicy::Blocked) && sealed.access.is_empty();
+
     Ok(NonoProfile {
         extends: "default",
         meta: Meta {
@@ -118,7 +125,7 @@ pub fn build_profile(config: &RunConfig, sealed: &SealedCredentials) -> Result<N
             deny: credential_deny_paths(sealed)?,
         },
         network: Network {
-            block: matches!(config.network, NetworkPolicy::Blocked),
+            block,
             allow_domain: allow_domains.into_iter().collect(),
             credentials,
             custom_credentials,
@@ -256,7 +263,11 @@ mod tests {
     }
 
     #[test]
-    fn generated_profile_blocks_network_when_credentials_are_configured() {
+    fn generated_profile_never_blocks_network_when_credentials_are_configured() {
+        // nono rejects `block: true` combined with any credential, since
+        // credential injection requires the local proxy to be reachable.
+        // `allow_domain` (see generated_profile_allows_access_upstream_hosts)
+        // already narrows this to just the credential upstream hosts.
         let config = RunConfig {
             command: "true".to_string(),
             fs_read: vec![".".to_string()],
@@ -277,6 +288,31 @@ mod tests {
                 endpoint_rules: Vec::new(),
             }],
             dir,
+            sanitized_env: BTreeMap::new(),
+        };
+
+        let profile = build_profile(&config, &sealed).expect("profile");
+        let json: serde_json::Value =
+            serde_json::to_value(&profile).expect("profile serializes as JSON");
+
+        // `block: false` is the serialization default, so `is_false` omits
+        // the field entirely rather than emitting a literal `false`.
+        assert_ne!(json["network"]["block"], true);
+    }
+
+    #[test]
+    fn generated_profile_blocks_network_without_credentials() {
+        let config = RunConfig {
+            command: "true".to_string(),
+            fs_read: vec![".".to_string()],
+            fs_write: Vec::new(),
+            network: NetworkPolicy::Blocked,
+            access: Vec::new(),
+            audit: crate::config::AuditConfig::Disabled,
+        };
+        let sealed = SealedCredentials {
+            dir: tempfile::tempdir().expect("tempdir"),
+            access: Vec::new(),
             sanitized_env: BTreeMap::new(),
         };
 

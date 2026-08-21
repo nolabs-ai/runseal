@@ -5,7 +5,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[test]
-fn blocked_network_with_credentials_emits_block_true_profile_json() {
+fn blocked_network_with_credentials_emits_block_false_profile_json() {
+    // nono rejects `block: true` combined with any credential, since
+    // credential injection requires the local proxy to be reachable, so a
+    // `network: mode: blocked` policy with an access grant must still emit
+    // `block: false` (allow_domain narrows this to the credential's upstream
+    // host only).
     let policy = r#"
 fs:
   read: ["."]
@@ -30,7 +35,9 @@ access:
 
     let json = read_profile_json(&run.captured_profile);
 
-    assert_eq!(json["network"]["block"], true);
+    // `block: false` is the serialization default, so `is_false` omits the
+    // field entirely rather than emitting a literal `false`.
+    assert_ne!(json["network"]["block"], true);
     assert_eq!(
         json["network"]["custom_credentials"]["cratesio"]["endpoint_rules"][0]["method"],
         "GET"

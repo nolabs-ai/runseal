@@ -3,6 +3,8 @@ mod config;
 mod profile;
 mod runner;
 mod secrets;
+#[cfg(test)]
+mod test_env;
 
 use anyhow::{bail, Context, Result};
 use config::{AuditConfig, RunConfig};

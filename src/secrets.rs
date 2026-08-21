@@ -25,9 +25,17 @@ pub struct SealedCredential {
 }
 
 pub fn seal_credentials(config: &RunConfig) -> Result<SealedCredentials> {
-    let dir = tempfile::Builder::new()
-        .prefix("runseal-creds.")
-        .tempdir()?;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("runseal-creds.");
+    let dir = match credential_temp_base_dir() {
+        Some(base) => builder.tempdir_in(&base).with_context(|| {
+            format!(
+                "failed to create credential temp dir under '{}'",
+                base.display()
+            )
+        })?,
+        None => builder.tempdir()?,
+    };
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700))?;
 
     let secret_names: HashSet<&str> = config.access.iter().map(|c| c.secret.as_str()).collect();
@@ -74,6 +82,56 @@ pub fn seal_credentials(config: &RunConfig) -> Result<SealedCredentials> {
         access: sealed,
         sanitized_env,
     })
+}
+
+// The credential dir is protected by a `filesystem.deny` rule in the
+// generated profile, and Landlock cannot carve a deny out of an already
+// allowed ancestor -- nono refuses to start on such a conflict. So the dir has
+// to sit outside everything nono's `default` profile allows, which rules out
+// the OS temp dir: `system_write_linux`/`system_write_macos` allow `/tmp` and
+// `$TMPDIR`, and `system_read_macos` additionally allows `/var` and `/private`
+// (covering the macOS `/var/folders` temp root).
+//
+// Preference order:
+//   1. `RUNNER_TEMP` -- GitHub Actions' per-job temp dir, wiped with the job.
+//   2. `$XDG_STATE_HOME/runseal` (default `~/.local/state/runseal`) -- the
+//      same convention nono uses for its own session secret material. No
+//      built-in group covers `~/.local/state` (`user_tools` grants only
+//      `~/.local/bin` and a few `~/.local/share` subdirs).
+//
+// Returning `None` leaves the caller on the OS temp dir. That keeps runseal
+// working for policies with no access grant (which emit no deny rule at all),
+// and for a grant nono reports the conflict explicitly rather than degrading.
+fn credential_temp_base_dir() -> Option<std::path::PathBuf> {
+    if let Some(runner_temp) = absolute_env_path("RUNNER_TEMP") {
+        return Some(runner_temp);
+    }
+
+    let state_home = absolute_env_path("XDG_STATE_HOME")
+        .or_else(|| absolute_env_path("HOME").map(|home| home.join(".local/state")))?;
+    let base = state_home.join("runseal");
+
+    // Owner-only, and created before `tempdir_in` needs it. The per-run
+    // subdir `seal_credentials` puts inside it is 0700 in its own right.
+    fs::create_dir_all(&base).ok()?;
+    fs::set_permissions(&base, fs::Permissions::from_mode(0o700)).ok()?;
+    Some(base)
+}
+
+// Env-var-supplied paths are untrusted: a relative or empty value would
+// resolve against the process cwd, which is exactly the tree the caller's
+// `fs.read` policy tends to allow.
+fn absolute_env_path(key: &str) -> Option<std::path::PathBuf> {
+    let value = env::var_os(key)?;
+    if value.is_empty() {
+        return None;
+    }
+    let path = std::path::PathBuf::from(value);
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        None
+    }
 }
 
 fn read_secret_env(secret_env: &str) -> Result<String> {
@@ -140,6 +198,107 @@ mod tests {
     use crate::config::{AccessConfig, AuditConfig, NetworkPolicy, SupportedInjectMode};
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
+
+    #[test]
+    fn credential_temp_base_dir_prefers_runner_temp_when_set() {
+        // Point RUNNER_TEMP at a directory that really exists: tests holding
+        // no `EnvVarGuard` still read this var through `seal_credentials`, and
+        // a bogus path would make their temp dir creation fail instead.
+        let runner_temp = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::test_env::EnvVarGuard::set("RUNNER_TEMP", runner_temp.path());
+
+        let base = credential_temp_base_dir();
+
+        assert_eq!(base, Some(runner_temp.path().to_path_buf()));
+    }
+
+    #[test]
+    fn credential_temp_base_dir_rejects_relative_runner_temp() {
+        // A relative RUNNER_TEMP would resolve against the cwd, which is the
+        // tree `fs.read` policies typically allow.
+        let _guard = crate::test_env::EnvVarGuard::set("RUNNER_TEMP", "relative/temp");
+
+        assert_eq!(absolute_env_path("RUNNER_TEMP"), None);
+    }
+
+    #[test]
+    fn credential_temp_base_dir_falls_back_to_xdg_state_home() {
+        let state_home = tempfile::tempdir().expect("tempdir");
+        // Nested so the mode assertion below observes a dir runseal created.
+        let xdg = state_home.path().join("state");
+        let _guard =
+            crate::test_env::EnvVarGuard::remove("RUNNER_TEMP").with_set("XDG_STATE_HOME", &xdg);
+
+        let base = credential_temp_base_dir().expect("XDG_STATE_HOME fallback");
+
+        assert_eq!(base, xdg.join("runseal"));
+        assert!(base.is_dir(), "fallback base must be created");
+        let mode = fs::metadata(&base).expect("metadata").permissions().mode();
+        assert_eq!(mode & 0o777, 0o700, "fallback base must be owner-only");
+    }
+
+    #[test]
+    fn credential_temp_base_dir_is_none_without_runner_temp_or_home() {
+        let _guard = crate::test_env::EnvVarGuard::remove("RUNNER_TEMP")
+            .with_remove("XDG_STATE_HOME")
+            .with_remove("HOME");
+
+        assert_eq!(credential_temp_base_dir(), None);
+    }
+
+    #[test]
+    fn credential_dir_avoids_os_temp_root_when_runseal_picks_the_base() {
+        // Regression test for the nono >= 0.74 deny-overlap check. The OS temp
+        // root is exactly what `system_write_linux`/`system_write_macos` allow
+        // as `/tmp` and `$TMPDIR`, so a credential dir sitting directly in it
+        // makes the generated deny rule unenforceable and nono refuse to
+        // start. Whether a caller-supplied RUNNER_TEMP escapes the allowed set
+        // is the caller's business; this pins the base runseal picks itself.
+        let state_home = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::test_env::EnvVarGuard::remove("RUNNER_TEMP")
+            .with_set("XDG_STATE_HOME", state_home.path());
+
+        let config = RunConfig {
+            command: "true".to_string(),
+            fs_read: vec![".".to_string()],
+            fs_write: Vec::new(),
+            network: NetworkPolicy::Blocked,
+            access: Vec::new(),
+            audit: AuditConfig::Disabled,
+        };
+        let sealed = seal_credentials(&config).expect("seal_credentials");
+
+        let parent = sealed.dir.path().parent().expect("credential dir parent");
+        assert_ne!(
+            parent,
+            env::temp_dir(),
+            "credential dir must not sit in the OS temp root"
+        );
+        assert_eq!(parent, state_home.path().join("runseal"));
+    }
+
+    #[test]
+    fn seal_credentials_places_tempdir_under_runner_temp_when_set() {
+        let runner_temp = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::test_env::EnvVarGuard::set("RUNNER_TEMP", runner_temp.path());
+
+        let config = RunConfig {
+            command: "true".to_string(),
+            fs_read: vec![".".to_string()],
+            fs_write: Vec::new(),
+            network: NetworkPolicy::Blocked,
+            access: Vec::new(),
+            audit: AuditConfig::Disabled,
+        };
+        let sealed = seal_credentials(&config).expect("seal_credentials");
+
+        assert!(
+            sealed.dir.path().starts_with(runner_temp.path()),
+            "expected credential dir '{}' under RUNNER_TEMP '{}'",
+            sealed.dir.path().display(),
+            runner_temp.path().display()
+        );
+    }
 
     #[test]
     fn validates_safe_access_grant_names() {
