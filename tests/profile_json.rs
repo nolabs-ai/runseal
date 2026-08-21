@@ -31,6 +31,14 @@ access:
     let json = read_profile_json(&run.captured_profile);
 
     assert_eq!(json["network"]["block"], true);
+    assert_eq!(
+        json["network"]["custom_credentials"]["cratesio"]["endpoint_rules"][0]["method"],
+        "GET"
+    );
+    assert_eq!(
+        json["network"]["custom_credentials"]["cratesio"]["inject_mode"],
+        "header"
+    );
 }
 
 #[test]
@@ -88,6 +96,37 @@ access:
         }),
         "credential file must remain unreadable via profile deny; denied={denied:?}, credential={}",
         credential_dir
+    );
+}
+
+#[test]
+fn invalid_inject_mode_fails_before_spawning_nono() {
+    let policy = r#"
+network:
+  mode: blocked
+access:
+  cratesio:
+    secret: CARGO_REGISTRY_TOKEN
+    url: https://crates.io
+    inject:
+      mode: heder
+    allow:
+      - GET /api/v1/crates
+"#;
+    let run = run_with_fake_nono(policy);
+
+    assert!(
+        !run.output.status.success(),
+        "runseal must reject an invalid inject mode"
+    );
+    assert!(
+        !run.captured_args.exists(),
+        "nono must not be spawned when the policy is invalid"
+    );
+    let stderr = String::from_utf8_lossy(&run.output.stderr);
+    assert!(
+        stderr.contains("not valid runseal policy YAML"),
+        "unexpected stderr:\n{stderr}"
     );
 }
 

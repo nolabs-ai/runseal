@@ -1,4 +1,4 @@
-use crate::config::{NetworkPolicy, RunConfig};
+use crate::config::{NetworkPolicy, RunConfig, SupportedInjectMode};
 use crate::secrets::SealedCredentials;
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -55,9 +55,10 @@ struct Network {
 struct CustomCredential {
     upstream: String,
     credential_key: String,
-    inject_mode: String,
+    inject_mode: SupportedInjectMode,
     inject_header: &'static str,
-    credential_format: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    credential_format: Option<&'static str>,
     env_var: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     tls_ca: Option<String>,
@@ -84,14 +85,19 @@ pub fn build_profile(config: &RunConfig, sealed: &SealedCredentials) -> Result<N
             allow_domains.insert(host.to_string());
         }
         credentials.push(credential.name.clone());
+
+        let credential_format = match credential.inject_mode {
+            SupportedInjectMode::Header => Some("Bearer {}"),
+            SupportedInjectMode::BasicAuth => None,
+        };
         custom_credentials.insert(
             credential.name.clone(),
             CustomCredential {
                 upstream: credential.upstream.clone(),
                 credential_key: format!("file://{}", credential.credential_file.display()),
-                inject_mode: credential.inject_mode.clone(),
+                inject_mode: credential.inject_mode,
                 inject_header: "Authorization",
-                credential_format: "Bearer {}",
+                credential_format,
                 env_var: credential.secret_env.clone(),
                 tls_ca: credential.tls_ca.clone(),
                 endpoint_rules: credential.endpoint_rules.clone(),
@@ -182,7 +188,7 @@ pub fn write_profile(path: &Path, profile: &NonoProfile) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{NetworkPolicy, RunConfig};
+    use crate::config::{NetworkPolicy, RunConfig, SupportedInjectMode};
     use crate::secrets::{SealedCredential, SealedCredentials};
     use std::collections::BTreeMap;
 
@@ -234,7 +240,7 @@ mod tests {
                 secret_env: "CARGO_REGISTRY_TOKEN".to_string(),
                 upstream: "https://crates.io".to_string(),
                 tls_ca: None,
-                inject_mode: "header".to_string(),
+                inject_mode: SupportedInjectMode::Header,
                 credential_file: dir.path().join("cratesio"),
                 endpoint_rules: Vec::new(),
             }],
@@ -266,7 +272,7 @@ mod tests {
                 secret_env: "CARGO_REGISTRY_TOKEN".to_string(),
                 upstream: "https://crates.io".to_string(),
                 tls_ca: None,
-                inject_mode: "header".to_string(),
+                inject_mode: SupportedInjectMode::Header,
                 credential_file: dir.path().join("cratesio"),
                 endpoint_rules: Vec::new(),
             }],
@@ -299,7 +305,7 @@ mod tests {
                 secret_env: "CARGO_REGISTRY_TOKEN".to_string(),
                 upstream: "https://crates.io".to_string(),
                 tls_ca: None,
-                inject_mode: "header".to_string(),
+                inject_mode: SupportedInjectMode::Header,
                 credential_file,
                 endpoint_rules: Vec::new(),
             }],
@@ -337,7 +343,7 @@ mod tests {
                 secret_env: "CARGO_REGISTRY_TOKEN".to_string(),
                 upstream: "https://crates.io".to_string(),
                 tls_ca: None,
-                inject_mode: "header".to_string(),
+                inject_mode: SupportedInjectMode::Header,
                 credential_file: dir.path().join("cratesio"),
                 endpoint_rules: Vec::new(),
             }],

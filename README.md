@@ -114,6 +114,8 @@ Runseal expects `network.mode: blocked` or `network.mode: filtered`.
 
 Add `network.allow` only for unauthenticated hosts the command must reach. Hosts
 used by access grants are added to the generated `nono` profile automatically.
+A `network.allow` list implies `mode: filtered` when `mode` is omitted;
+combining it with an explicit `mode: blocked` is a configuration error.
 
 ```yaml
 network:
@@ -143,10 +145,31 @@ The sandboxed command receives a phantom credential for SDK compatibility. The
 real secret remains outside the sandbox and is only inserted by the proxy when
 the host and endpoint policy match.
 
+`inject.mode` selects how the proxy injects the secret:
+
+| Mode | Status | Behavior |
+| --- | --- | --- |
+| `header` | Default | Injected as an `Authorization: Bearer` header. |
+| `basic_auth` | Supported | Injected as HTTP basic auth credentials. |
+| `url_path` | Reserved | Rejected; runseal does not emit the required `path_pattern` yet. |
+| `query_param` | Reserved | Rejected; runseal does not emit the required `query_param_name` yet. |
+
+```yaml
+access:
+  fly:
+    secret: FLY_API_TOKEN
+    url: https://api.machines.dev
+    inject:
+      mode: header
+    allow:
+      - POST /v1/apps/*/machines
+```
+
 ### HTTPS Endpoint Filtering
 
 `allow` restricts access use by HTTP method and path. Matching is allow-list
-based.
+based. The method may be any HTTP method token (`GET`, `DELETE`, `PROPFIND`,
+...) or the wildcard `*`; methods are uppercased before matching.
 
 ```yaml
 allow:
@@ -222,7 +245,7 @@ still allowing L7 policy enforcement.
 | `policy` | No | empty | Runseal policy YAML. Prefer this for new workflows. |
 | `fs-read` | No | empty | Comma-separated read paths when `policy` is not set. |
 | `fs-write` | No | empty | Comma-separated write paths when `policy` is not set. |
-| `network` | No | `blocked` | Network policy when `policy` is not set: `blocked` or comma-separated domains. |
+| `network` | No | `blocked` | Network policy when `policy` is not set: `blocked` or comma-separated domains. `filtered` is only valid as `network.mode` inside `policy` and is rejected here. |
 | `runseal-version` | No | `0.3.1` | Runseal release version to install. Accepts `v0.1.0` or `0.1.0`. |
 | `nono-version` | No | `0.62.0` | nono release version to install. Accepts `v0.1.0` or `0.1.0`. |
 | `verify-attestations` | No | `true` | Verify GitHub artifact attestations for downloaded release assets. |
