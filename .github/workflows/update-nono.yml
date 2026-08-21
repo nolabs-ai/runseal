@@ -1,0 +1,186 @@
+name: Update nono
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check for newer nono release
+    runs-on: ubuntu-latest
+    outputs:
+      current: ${{ steps.versions.outputs.current }}
+      latest: ${{ steps.versions.outputs.latest }}
+      stale: ${{ steps.versions.outputs.stale }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve current and latest nono versions
+        id: versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current="$(grep -oE 'NONO_VERSION="\$\{NONO_VERSION:-[0-9]+\.[0-9]+\.[0-9]+\}"' setup.sh | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
+          latest="$(gh release view --repo nolabs-ai/nono --json tagName -q .tagName | sed 's/^v//')"
+          echo "current pinned: ${current}"
+          echo "latest release: ${latest}"
+          echo "current=${current}" >> "${GITHUB_OUTPUT}"
+          echo "latest=${latest}" >> "${GITHUB_OUTPUT}"
+          if [[ "${current}" != "${latest}" ]]; then
+            echo "stale=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "stale=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+  compat-check:
+    name: Dogfood runseal against candidate nono release
+    needs: check
+    if: success() && needs.check.outputs.stale == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+        with:
+          toolchain: stable
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libdbus-1-dev \
+            pkg-config
+
+      # Exercise the published action's install + sandbox path (attestation
+      # verification, checksum verification, fs/network policy enforcement)
+      # against the candidate nono release.
+      - name: Sandbox smoke test against candidate nono release
+        uses: ./
+        with:
+          run: printf "runseal + candidate nono ok\n"
+          runseal-version: source
+          nono-version: ${{ needs.check.outputs.latest }}
+          policy: |
+            fs:
+              read: ["."]
+              write: []
+            network:
+              mode: blocked
+
+      - name: Secret injection smoke test against candidate nono release
+        uses: ./
+        env:
+          RUNSEAL_QA_API_TOKEN: dummy-not-a-real-secret
+        with:
+          run: |
+            # The sandboxed command receives a phantom credential on the
+            # original env var (see README.md), not an empty value -- assert
+            # only that the real secret never reaches the sandbox.
+            test "$RUNSEAL_QA_API_TOKEN" != "dummy-not-a-real-secret"
+            printf "secret stripped ok\n"
+          runseal-version: source
+          nono-version: ${{ needs.check.outputs.latest }}
+          policy: |
+            fs:
+              read: ["."]
+              write: []
+            network:
+              mode: filtered
+            access:
+              api:
+                secret: RUNSEAL_QA_API_TOKEN
+                url: https://example.com
+                allow:
+                  - GET /**
+
+      # fs read/write, network allowlisting, and HTTP/TLS credential injection,
+      # run against the nono binary.
+      - name: Run full QA harness against candidate nono release
+        env:
+          NONO_VERSION: ${{ needs.check.outputs.latest }}
+          RUNSEAL_VERSION: source
+          RUNSEAL_ACTION_PATH: ${{ github.workspace }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bash setup.sh
+          scripts/run-local-qa.sh
+
+      - name: Open incompatibility issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          title="nono v${{ needs.check.outputs.latest }} breaks runseal compatibility checks"
+          if gh issue list --search "in:title \"${title}\"" --state open --json number -q '.[0].number' | grep -q .; then
+            echo "Open issue already tracks this incompatibility; skipping."
+            exit 0
+          fi
+          gh issue create \
+            --title "${title}" \
+            --body "The scheduled [Update nono](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) workflow found that nono v${{ needs.check.outputs.latest }} (currently pinned: v${{ needs.check.outputs.current }}) fails runseal's compatibility checks. See the failed run for details before bumping the pinned version."
+
+  bump-pr:
+    name: Open version bump PR
+    needs: [check, compat-check]
+    if: success() && needs.check.outputs.stale == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true
+
+      - name: Bump pinned nono version
+        env:
+          CURRENT: ${{ needs.check.outputs.current }}
+          LATEST: ${{ needs.check.outputs.latest }}
+        run: |
+          set -euo pipefail
+          sed -i "s/NONO_VERSION:-${CURRENT}}/NONO_VERSION:-${LATEST}}/" setup.sh
+          sed -i "/nono-version:/,/default:/ s/default: \"${CURRENT}\"/default: \"${LATEST}\"/" action.yml
+          sed -i "s/\`nono-version\` | No | \`${CURRENT}\`/\`nono-version\` | No | \`${LATEST}\`/" README.md
+          git diff --stat
+
+      - name: Open pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATEST: ${{ needs.check.outputs.latest }}
+          CURRENT: ${{ needs.check.outputs.current }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          branch="chore/bump-nono-${LATEST}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${branch}"
+          # -s derives the DCO trailer from the user.name/user.email above, so
+          # the sign-off never has to be embedded as a literal newline here.
+          git commit -asm "chore(deps): bump nono to v${LATEST}"
+          git push --force origin "${branch}"
+          if gh pr list --head "${branch}" --state open --json number -q '.[0].number' | grep -q .; then
+            echo "PR already open for ${branch}; skipping create."
+            exit 0
+          fi
+          body="$(printf 'Bumps the pinned nono release from v%s to v%s.\n\nVerified by the [Update nono](%s) workflow compatibility check, which ran runseal action-level smoke tests and the full QA harness against the candidate release before this PR was opened.\n' "${CURRENT}" "${LATEST}" "${RUN_URL}")"
+          gh pr create \
+            --title "chore(deps): bump nono to v${LATEST}" \
+            --base main \
+            --head "${branch}" \
+            --body "${body}"
