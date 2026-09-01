@@ -271,6 +271,8 @@ mod tests {
 
     #[test]
     fn empty_json_list_output_has_no_sessions() {
-        assert!(parse_audit_list_json("").unwrap().is_empty());
+        assert!(parse_audit_list_json("")
+            .expect("empty output parses")
+            .is_empty());
     }
 }

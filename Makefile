@@ -29,7 +29,7 @@ check: clippy fmt-check
 lint: check
 
 clippy:
-	$(CARGO) clippy --all-targets --locked -- -D warnings
+	$(CARGO) clippy --all-targets --locked -- -D warnings -D clippy::unwrap_used
 
 fmt:
 	$(CARGO) fmt --all
