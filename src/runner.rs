@@ -180,7 +180,7 @@ mod tests {
     fn read_directory_uses_read_flag() {
         let dir = tempfile::tempdir().expect("tempdir");
         assert_eq!(
-            fs_flag(path_str(dir.path()), FsAccess::Read).unwrap(),
+            fs_flag(path_str(dir.path()), FsAccess::Read).expect("read flag for directory"),
             "--read"
         );
     }
@@ -192,7 +192,7 @@ mod tests {
         fs::write(&file, "allowed").expect("write file");
 
         assert_eq!(
-            fs_flag(path_str(&file), FsAccess::Read).unwrap(),
+            fs_flag(path_str(&file), FsAccess::Read).expect("read flag for file"),
             "--read-file"
         );
     }
@@ -201,7 +201,7 @@ mod tests {
     fn write_directory_uses_write_flag() {
         let dir = tempfile::tempdir().expect("tempdir");
         assert_eq!(
-            fs_flag(path_str(dir.path()), FsAccess::Write).unwrap(),
+            fs_flag(path_str(dir.path()), FsAccess::Write).expect("write flag for directory"),
             "--write"
         );
     }
@@ -213,7 +213,7 @@ mod tests {
         fs::write(&file, "old").expect("write file");
 
         assert_eq!(
-            fs_flag(path_str(&file), FsAccess::Write).unwrap(),
+            fs_flag(path_str(&file), FsAccess::Write).expect("write flag for file"),
             "--write-file"
         );
     }
@@ -223,7 +223,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let missing = dir.path().join("missing.txt");
 
-        let err = fs_flag(path_str(&missing), FsAccess::Read).unwrap_err();
+        let err =
+            fs_flag(path_str(&missing), FsAccess::Read).expect_err("missing read path must fail");
         assert!(err.to_string().contains("does not exist"));
     }
 
