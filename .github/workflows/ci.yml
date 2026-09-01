@@ -78,6 +78,17 @@ jobs:
       - name: Run Clippy
         run: make clippy
 
+  versions:
+    name: Version Consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check pinned versions agree
+        run: make version-check
+
   audit:
     name: Cargo Audit
     runs-on: ubuntu-latest

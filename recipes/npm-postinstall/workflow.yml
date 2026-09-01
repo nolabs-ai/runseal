@@ -17,7 +17,7 @@ jobs:
           persist-credentials: false
 
       - name: Fetch npm dependencies
-        uses: always-further/runseal@main
+        uses: nolabs-ai/runseal@main
         with:
           run: npm ci --ignore-scripts
           policy: |
@@ -30,7 +30,7 @@ jobs:
                 - registry.npmjs.org
 
       - name: Run required package scripts without network
-        uses: always-further/runseal@main
+        uses: nolabs-ai/runseal@main
         with:
           run: npm rebuild
           policy: |

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RUNSEAL_VERSION="${RUNSEAL_VERSION:-0.3.1}"
+RUNSEAL_VERSION="${RUNSEAL_VERSION:-0.3.3}"
 NONO_VERSION="${NONO_VERSION:-0.62.0}"
 RUNSEAL_REPO="${RUNSEAL_REPO:-nolabs-ai/runseal}"
 NONO_REPO="${NONO_REPO:-nolabs-ai/nono}"
