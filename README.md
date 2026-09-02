@@ -130,7 +130,9 @@ Each key under `access` is a named grant. `secret` is the environment variable
 containing the real secret, `url` is the service base URL, and `allow` lists the
 HTTP routes where the secret may be injected. Runseal masks the secret in logs,
 writes it to a private file, removes it from the child environment, and
-configures `nono` to inject it through the local proxy.
+configures `nono` to inject it through the local proxy. Runseal's own copy of
+the plaintext is zeroed out of memory once the credential file is written, and
+on every error path in between.
 
 ```yaml
 access:
