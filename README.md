@@ -16,7 +16,7 @@
 
 Runseal was built to solve the problem of software supply chain attacks that are often triggered from GitHub Actions-based exploits.
 
-We built runseal in response to the rise of supply chain attacks targeting GitHub Actions, where attackers often gain access to repository secrets and use them to exfiltrate data or deploy malicious code. By using [nono's](https://github.com/always-further/nono) kernel-enforced sandboxing, runseal can protect sensitive files, secrets/tokens, and filter network access from untrusted or malicious code, while still allowing necessary software engineering operations through a flexible policy system.
+We built runseal in response to the rise of supply chain attacks targeting GitHub Actions, where attackers often gain access to repository secrets and use them to exfiltrate data or deploy malicious code. By using [nono's](https://github.com/nolabs-ai/nono) kernel-enforced sandboxing, runseal can protect sensitive files, secrets/tokens, and filter network access from untrusted or malicious code, while still allowing necessary software engineering operations through a flexible policy system.
 
 From the same folks who brought you [sigstore](https://sigstore.dev) and [nono](https://nono.sh).
 
@@ -46,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: always-further/runseal@v0.3.3
+      - uses: nolabs-ai/runseal@v0.3.3
         with:
           run: npm publish
           policy: |
@@ -187,7 +187,7 @@ still allowing L7 policy enforcement.
 ### Run Tests With No Network
 
 ```yaml
-- uses: always-further/runseal@v0.3.2
+- uses: nolabs-ai/runseal@v0.3.3
   with:
     run: npm test
     policy: |
@@ -201,7 +201,7 @@ still allowing L7 policy enforcement.
 ### Build With Package Registry Access
 
 ```yaml
-- uses: always-further/runseal@v0.3.2
+- uses: nolabs-ai/runseal@v0.3.3
   with:
     run: npm ci
     policy: |
@@ -217,7 +217,7 @@ still allowing L7 policy enforcement.
 ### Deploy With A Sealed Token
 
 ```yaml
-- uses: always-further/runseal@v0.3.2
+- uses: nolabs-ai/runseal@v0.3.3
   with:
     run: ./scripts/deploy.sh
     policy: |
@@ -246,7 +246,7 @@ still allowing L7 policy enforcement.
 | `fs-read` | No | empty | Comma-separated read paths when `policy` is not set. |
 | `fs-write` | No | empty | Comma-separated write paths when `policy` is not set. |
 | `network` | No | `blocked` | Network policy when `policy` is not set: `blocked` or comma-separated domains. `filtered` is only valid as `network.mode` inside `policy` and is rejected here. |
-| `runseal-version` | No | `0.3.1` | Runseal release version to install. Accepts `v0.1.0` or `0.1.0`. |
+| `runseal-version` | No | `0.3.3` | Runseal release version to install. Accepts `v0.1.0` or `0.1.0`. |
 | `nono-version` | No | `0.62.0` | nono release version to install. Accepts `v0.1.0` or `0.1.0`. |
 | `verify-attestations` | No | `true` | Verify GitHub artifact attestations for downloaded release assets. |
 | `audit` | No | `false` | Set to `artifact` or `true` to upload nono audit evidence as a GitHub Actions artifact. |
@@ -256,7 +256,7 @@ still allowing L7 policy enforcement.
 Runseal can export the nono audit session for a sandboxed command:
 
 ```yaml
-- uses: always-further/runseal@v0.3.2
+- uses: nolabs-ai/runseal@v0.3.3
   with:
     run: npm rebuild
     audit: artifact

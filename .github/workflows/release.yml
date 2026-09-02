@@ -11,7 +11,7 @@ permissions:
 jobs:
   build:
     name: Build release binaries
-    if: github.repository == 'always-further/runseal'
+    if: ${{ !github.event.repository.fork }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -49,9 +49,10 @@ jobs:
           tar -C dist/pkg -czf "dist/${asset}" runseal
           (cd dist && sha256sum "${asset}" > SHA256SUMS)
           echo "asset=dist/${asset}" >> "${GITHUB_OUTPUT}"
+          echo "asset_name=${asset}" >> "${GITHUB_OUTPUT}"
 
       - name: Attest release assets
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             ${{ steps.package.outputs.asset }}
@@ -65,3 +66,21 @@ jobs:
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
             gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes "Runseal ${GITHUB_REF_NAME}"
           gh release upload "${GITHUB_REF_NAME}" dist/*.tar.gz dist/SHA256SUMS --clobber
+
+      - name: Verify published assets are installable
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET: ${{ steps.package.outputs.asset_name }}
+        run: |
+          set -euo pipefail
+          published="$(gh release view "${GITHUB_REF_NAME}" --json assets -q '.assets[].name')"
+          for required in "${ASSET}" SHA256SUMS; do
+            if ! printf '%s\n' "${published}" | grep -Fxq "${required}"; then
+              echo "::error::release ${GITHUB_REF_NAME} is missing required asset '${required}'"
+              exit 1
+            fi
+          done
+          gh attestation verify "${{ steps.package.outputs.asset }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-repo "${GITHUB_REPOSITORY}"
+          echo "published assets verified: ${published//$'\n'/, }"

@@ -16,7 +16,7 @@ recipe.
 For a released version of Runseal, replace:
 
 ```yaml
-uses: always-further/runseal@main
+uses: nolabs-ai/runseal@main
 ```
 
 with the current release tag.
@@ -43,7 +43,7 @@ jobs:
           persist-credentials: false
 
       - name: Install dependencies without lifecycle scripts
-        uses: always-further/runseal@main
+        uses: nolabs-ai/runseal@main
         with:
           run: npm ci --ignore-scripts
           policy: |
@@ -82,7 +82,7 @@ that case, split dependency fetching from script execution.
 
 ```yaml
 - name: Fetch npm dependencies
-  uses: always-further/runseal@main
+  uses: nolabs-ai/runseal@main
   with:
     run: npm ci --ignore-scripts
     policy: |
@@ -95,7 +95,7 @@ that case, split dependency fetching from script execution.
           - registry.npmjs.org
 
 - name: Run required package scripts without network
-  uses: always-further/runseal@main
+  uses: nolabs-ai/runseal@main
   with:
     run: npm rebuild
     policy: |
