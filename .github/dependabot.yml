@@ -18,3 +18,16 @@ updates:
       rust-dependencies:
         patterns:
           - "*"
+
+  # The nono release binary this action installs.
+  - package-ecosystem: cargo
+    directory: /.github/nono-version
+    schedule:
+      interval: daily
+    commit-message:
+      prefix: "chore(nono)"
+    labels:
+      - dependencies
+      - nono
+    allow:
+      - dependency-name: nono-cli

@@ -1,0 +1,165 @@
+name: nono Pin
+
+# Guards the Dependabot-managed nono pin in .github/nono-version/Cargo.toml.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/nono-version/**'
+      - '.github/workflows/nono-pin.yml'
+      - 'scripts/nono-pinned-version.sh'
+      - 'setup.sh'
+      - 'action.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/nono-version/**'
+      - '.github/workflows/nono-pin.yml'
+      - 'scripts/nono-pinned-version.sh'
+      - 'setup.sh'
+      - 'action.yml'
+  schedule:
+    # Daily, shortly after Dependabot's daily check on the pin directory.
+    - cron: '17 6 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nono-pin-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pin-script:
+    name: Pin resolver
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.pin.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolver prints a usable version
+        id: pin
+        run: |
+          version="$(scripts/nono-pinned-version.sh)"
+          echo "resolved ${version}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Resolver rejects a bad manifest
+        run: |
+          printf 'nono-cli = "0.62.0"\n' > "${RUNNER_TEMP}/loose.toml"
+          if scripts/nono-pinned-version.sh "${RUNNER_TEMP}/loose.toml"; then
+            echo "expected failure on non-exact requirement" >&2
+            exit 1
+          fi
+
+  # Builds runseal from source and runs the action for real.
+  default-pin:
+    name: Action uses the pin by default
+    runs-on: ubuntu-latest
+    needs: pin-script
+    if: github.event_name != 'schedule'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The pinned version is validated as a bare X.Y.Z by
+      # scripts/nono-pinned-version.sh before it reaches this interpolation.
+      - name: Run with no nono-version input
+        uses: ./
+        with:
+          runseal-version: source
+          run: |
+            nono --version
+            nono --version | grep -F '${{ needs.pin-script.outputs.version }}'
+            printf "sandbox ok\n"
+          policy: |
+            fs:
+              read: ["."]
+              write: []
+            network:
+              mode: blocked
+
+  explicit-override:
+    name: Explicit nono-version still wins
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run with an explicit nono-version
+        uses: ./
+        with:
+          runseal-version: source
+          nono-version: "0.74.0"
+          run: |
+            nono --version | grep -F 0.74.0
+            printf "override ok\n"
+          policy: |
+            fs:
+              read: ["."]
+              write: []
+            network:
+              mode: blocked
+
+  # Upstream drift
+  pin-freshness:
+    name: Pin tracks published nono releases
+    runs-on: ubuntu-latest
+    needs: pin-script
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Compare pin with the latest nono release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PINNED: ${{ needs.pin-script.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          read -r tag published < <(
+            gh release view --repo nolabs-ai/nono \
+              --json tagName,publishedAt \
+              --jq '[.tagName, .publishedAt] | @tsv'
+          )
+          latest="${tag#v}"
+
+          if [[ "${latest}" == "${PINNED}" ]]; then
+            echo "pin ${PINNED} is the latest nono release"
+            exit 0
+          fi
+
+          # Dependabot can only see versions published to crates.io. If the
+          # newest release never made it to the registry, the pin is stuck and
+          # no bump PR will ever arrive.
+          status="$(
+            curl -sS -o /dev/null -w '%{http_code}' \
+              -H 'User-Agent: runseal-ci (https://github.com/nolabs-ai/runseal)' \
+              "https://crates.io/api/v1/crates/nono-cli/${latest}"
+          )"
+
+          if [[ "${status}" == "200" ]]; then
+            echo "::warning::Pin is ${PINNED}; nono ${latest} is published to crates.io. Expect a Dependabot bump PR."
+            exit 0
+          fi
+
+          if [[ "${status}" != "404" ]]; then
+            echo "::error::crates.io lookup for nono-cli ${latest} returned HTTP ${status}" >&2
+            exit 1
+          fi
+
+          # Allow a grace window for the crates.io publish to follow the release.
+          published_epoch="$(date -u -d "${published}" +%s)"
+          now_epoch="$(date -u +%s)"
+          age_hours="$(( (now_epoch - published_epoch) / 3600 ))"
+
+          if (( age_hours < 48 )); then
+            echo "::notice::nono ${latest} was released ${age_hours}h ago and is not on crates.io yet; pin stays at ${PINNED}."
+            exit 0
+          fi
+
+          echo "::error::nono ${latest} was released ${age_hours}h ago but nono-cli ${latest} is not on crates.io, so Dependabot cannot bump the pin (still ${PINNED}). Publish the crate or update .github/nono-version/Cargo.toml by hand." >&2
+          exit 1

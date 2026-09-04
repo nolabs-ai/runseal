@@ -1,3 +1,4 @@
 /target/
 /.DS_Store
 /runseal-lab/
+/.github/nono-version/Cargo.lock
