@@ -1,0 +1,24 @@
+# Dependabot's handle on the nono release that this action pins.
+#
+# The requirement below names a crates.io version of nono-cli, but setup.sh
+# installs the GitHub release binary `v<version>` from nolabs-ai/nono. Nothing
+# in Cargo guarantees those stay in step, so .github/workflows/nono-pin.yml
+# enforces the coupling: a matching attested release must exist, the installed
+# binary must report this version, and a nono release that never reached
+# crates.io (which Dependabot cannot see) is reported instead of ignored.
+[package]
+name = "runseal-nono-pin"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+# Keep this as an inline exact-version string: scripts/nono-pinned-version.sh
+# parses this literal form and fails closed on anything else.
+nono-cli = "=0.75.0"
+
+[workspace]

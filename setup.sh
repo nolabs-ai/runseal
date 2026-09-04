@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SETUP_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+
 RUNSEAL_VERSION="${RUNSEAL_VERSION:-0.3.3}"
-NONO_VERSION="${NONO_VERSION:-0.62.0}"
+# Empty means "use the Dependabot-tracked pin"; resolved below via
+# scripts/nono-pinned-version.sh.
+NONO_VERSION="${NONO_VERSION:-}"
 RUNSEAL_REPO="${RUNSEAL_REPO:-nolabs-ai/runseal}"
 NONO_REPO="${NONO_REPO:-nolabs-ai/nono}"
 RUNSEAL_VERIFY_ATTESTATIONS="${RUNSEAL_VERIFY_ATTESTATIONS:-true}"
@@ -229,6 +233,11 @@ TARGET="$(detect_target)"
 
 mkdir -p "${HOME}/.nono/sessions"
 chmod 700 "${HOME}/.nono" "${HOME}/.nono/sessions"
+
+if [[ -z "${NONO_VERSION}" ]]; then
+    NONO_VERSION="$(bash "${SETUP_DIR}/scripts/nono-pinned-version.sh")"
+    echo "Using pinned nono version ${NONO_VERSION}"
+fi
 
 install_release_binary "nono" "${NONO_REPO}" "${NONO_VERSION}" "${TARGET}"
 
