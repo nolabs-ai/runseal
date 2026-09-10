@@ -3,6 +3,7 @@
 mod audit;
 mod config;
 mod profile;
+mod repo_profile;
 mod runner;
 mod secrets;
 
@@ -21,6 +22,10 @@ fn real_main() -> Result<()> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
         Some("run") => run(),
+        Some("capabilities") => {
+            println!("repo-profile-v1");
+            Ok(())
+        }
         Some("--version") | Some("version") => {
             println!("runseal {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -35,6 +40,12 @@ fn run() -> Result<()> {
     let sealed = secrets::seal_credentials(&config).context("failed to seal credentials")?;
     let profile =
         profile::build_profile(&config, &sealed).context("failed to build nono profile")?;
+    // Stage the sibling before nono resolves the profiles extended by the generated profile.
+    if let Some(repo_profile) = &config.repo_profile {
+        repo_profile
+            .write_sibling(sealed.dir.path())
+            .context("failed to stage the repo nono profile")?;
+    }
     let profile_path = sealed.dir.path().join("profile.json");
     profile::write_profile(&profile_path, &profile).context("failed to write nono profile")?;
 

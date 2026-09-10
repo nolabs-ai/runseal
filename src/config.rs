@@ -1,6 +1,8 @@
+use crate::repo_profile::{self, RepoProfile};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::env;
+use std::path::PathBuf;
 
 const MAX_POLICY_YAML_BYTES: usize = 64 * 1024;
 
@@ -12,12 +14,14 @@ pub struct RunConfig {
     pub network: NetworkPolicy,
     pub access: Vec<AccessConfig>,
     pub audit: AuditConfig,
+    pub repo_profile: Option<RepoProfile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetworkPolicy {
     Blocked,
     AllowDomains(Vec<String>),
+    FromRepoProfile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -172,6 +176,10 @@ impl RunConfig {
             .or_else(|| env_value("NONO_ACTION_COMMAND"))
             .context("RUNSEAL_RUN is required")?;
 
+        if let Some(profile_input) = env_value("RUNSEAL_PROFILE") {
+            return Self::from_repo_profile(command, &profile_input);
+        }
+
         if let Some(policy_yaml) = env_value("RUNSEAL_POLICY") {
             let policy = parse_policy_yaml(&policy_yaml)?;
             return Self::from_policy(command, policy);
@@ -203,6 +211,48 @@ impl RunConfig {
             network,
             access: Vec::new(),
             audit,
+            repo_profile: None,
+        })
+    }
+
+    fn from_repo_profile(command: String, profile_input: &str) -> Result<Self> {
+        if let Some(conflict) = conflicting_policy_input(
+            env_value("RUNSEAL_POLICY").as_deref(),
+            env_value("RUNSEAL_FS_READ")
+                .or_else(|| env_value("NONO_ACTION_FS_READ"))
+                .as_deref(),
+            env_value("RUNSEAL_FS_WRITE")
+                .or_else(|| env_value("NONO_ACTION_FS_WRITE"))
+                .as_deref(),
+            env_value("RUNSEAL_NETWORK")
+                .or_else(|| env_value("NONO_ACTION_NETWORK"))
+                .as_deref(),
+        ) {
+            bail!(
+                "both {conflict} and profile '{profile_input}' are set; use exactly one policy source"
+            );
+        }
+
+        let workspace = workspace_dir()?;
+        let repo_profile = repo_profile::load(profile_input, &workspace)?;
+        let network = if repo_profile.allows_domains() {
+            NetworkPolicy::FromRepoProfile
+        } else {
+            // Keep default-deny explicit when no domains are granted.
+            NetworkPolicy::Blocked
+        };
+
+        Ok(Self {
+            command,
+            fs_read: Vec::new(),
+            fs_write: Vec::new(),
+            network,
+            access: Vec::new(),
+            audit: parse_audit(
+                env_value("RUNSEAL_AUDIT").as_deref(),
+                env_value("RUNSEAL_AUDIT_DIR").as_deref(),
+            )?,
+            repo_profile: Some(repo_profile),
         })
     }
 
@@ -251,6 +301,7 @@ impl RunConfig {
                 env_value("RUNSEAL_AUDIT").as_deref(),
                 env_value("RUNSEAL_AUDIT_DIR").as_deref(),
             )?,
+            repo_profile: None,
         })
     }
 }
@@ -265,6 +316,39 @@ fn parse_policy_yaml(policy_yaml: &str) -> Result<PolicyInput> {
     }
 
     serde_yaml_ng::from_str(policy_yaml).context("RUNSEAL_POLICY is not valid runseal policy YAML")
+}
+
+/// Find a conflicting input.
+fn conflicting_policy_input(
+    policy: Option<&str>,
+    fs_read: Option<&str>,
+    fs_write: Option<&str>,
+    network: Option<&str>,
+) -> Option<&'static str> {
+    [
+        ("policy", policy),
+        ("fs-read", fs_read),
+        ("fs-write", fs_write),
+        ("network", network),
+    ]
+    .into_iter()
+    .find(|(_, value)| value.is_some_and(|value| !value.trim().is_empty()))
+    .map(|(name, _)| name)
+}
+
+/// Resolve profiles against GITHUB_WORKSPACE, or the current directory if unset.
+fn workspace_dir() -> Result<PathBuf> {
+    if let Some(workspace) = env_value("GITHUB_WORKSPACE") {
+        let workspace = PathBuf::from(workspace);
+        if workspace.is_absolute() && workspace.is_dir() {
+            return Ok(workspace);
+        }
+        bail!(
+            "GITHUB_WORKSPACE '{}' is not an absolute path to an existing directory",
+            workspace.display()
+        );
+    }
+    env::current_dir().context("failed to resolve the working directory")
 }
 
 fn env_value(name: &str) -> Option<String> {
@@ -286,7 +370,7 @@ fn is_network_mode_keyword(value: &str) -> bool {
 }
 
 /// Trims and rejects entries that cannot be domains.
-fn validate_domain_allowlist(domains: Vec<String>) -> Result<Vec<String>> {
+pub(crate) fn validate_domain_allowlist(domains: Vec<String>) -> Result<Vec<String>> {
     let domains: Vec<String> = domains
         .into_iter()
         .map(|domain| domain.trim().to_string())
@@ -378,6 +462,35 @@ mod tests {
 
     fn method(token: &str) -> HttpMethod {
         token.parse().expect("method token")
+    }
+
+    #[test]
+    fn a_repo_profile_conflicts_with_every_other_policy_input() {
+        for (label, policy, fs_read, fs_write, network) in [
+            ("policy", Some("fs: {}"), None, None, None),
+            ("fs-read", None, Some("."), None, None),
+            ("fs-write", None, None, Some("./dist"), None),
+            ("network", None, None, None, Some("blocked")),
+        ] {
+            assert_eq!(
+                conflicting_policy_input(policy, fs_read, fs_write, network),
+                Some(label)
+            );
+        }
+    }
+
+    #[test]
+    fn a_repo_profile_alone_has_no_conflict() {
+        assert_eq!(conflicting_policy_input(None, None, None, None), None);
+    }
+
+    /// Unset action inputs arrive as empty environment variables.
+    #[test]
+    fn blank_policy_inputs_do_not_count_as_a_conflict() {
+        assert_eq!(
+            conflicting_policy_input(Some(""), Some("  "), Some(""), Some("\n")),
+            None
+        );
     }
 
     #[test]

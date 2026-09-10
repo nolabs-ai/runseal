@@ -8,7 +8,7 @@ use std::path::Path;
 
 #[derive(Debug, Serialize)]
 pub struct NonoProfile {
-    extends: &'static str,
+    extends: Vec<String>,
     meta: Meta,
     groups: Groups,
     #[serde(skip_serializing_if = "Filesystem::is_empty")]
@@ -41,8 +41,8 @@ impl Filesystem {
 
 #[derive(Debug, Serialize)]
 struct Network {
-    #[serde(skip_serializing_if = "is_false")]
-    block: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    block: Option<bool>,
     #[serde(rename = "allow_domain", skip_serializing_if = "Vec::is_empty")]
     allow_domain: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -66,13 +66,9 @@ struct CustomCredential {
     endpoint_rules: Vec<crate::config::EndpointRule>,
 }
 
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 pub fn build_profile(config: &RunConfig, sealed: &SealedCredentials) -> Result<NonoProfile> {
     let mut allow_domains: BTreeSet<String> = match &config.network {
-        NetworkPolicy::Blocked => Vec::new(),
+        NetworkPolicy::Blocked | NetworkPolicy::FromRepoProfile => Vec::new(),
         NetworkPolicy::AllowDomains(domains) => domains.clone(),
     }
     .into_iter()
@@ -106,7 +102,7 @@ pub fn build_profile(config: &RunConfig, sealed: &SealedCredentials) -> Result<N
     }
 
     Ok(NonoProfile {
-        extends: "default",
+        extends: extends(config),
         meta: Meta {
             name: "runseal-generated",
             version: env!("CARGO_PKG_VERSION"),
@@ -118,12 +114,24 @@ pub fn build_profile(config: &RunConfig, sealed: &SealedCredentials) -> Result<N
             deny: credential_deny_paths(sealed)?,
         },
         network: Network {
-            block: matches!(config.network, NetworkPolicy::Blocked),
+            block: match config.network {
+                NetworkPolicy::Blocked => Some(true),
+                NetworkPolicy::AllowDomains(_) | NetworkPolicy::FromRepoProfile => None,
+            },
             allow_domain: allow_domains.into_iter().collect(),
             credentials,
             custom_credentials,
         },
     })
+}
+
+/// Merge default, then the repo sibling, beneath the generated profile.
+fn extends(config: &RunConfig) -> Vec<String> {
+    let mut extends = vec!["default".to_string()];
+    if config.repo_profile.is_some() {
+        extends.push(crate::repo_profile::BASE_NAME.to_string());
+    }
+    extends
 }
 
 fn credential_deny_paths(sealed: &SealedCredentials) -> Result<Vec<String>> {
@@ -201,6 +209,7 @@ mod tests {
             network: NetworkPolicy::Blocked,
             access: Vec::new(),
             audit: crate::config::AuditConfig::Disabled,
+            repo_profile: None,
         };
         let sealed = SealedCredentials {
             dir: tempfile::tempdir().expect("tempdir"),
@@ -232,6 +241,7 @@ mod tests {
             network: NetworkPolicy::Blocked,
             access: Vec::new(),
             audit: crate::config::AuditConfig::Disabled,
+            repo_profile: None,
         };
         let dir = tempfile::tempdir().expect("tempdir");
         let sealed = SealedCredentials {
@@ -264,6 +274,7 @@ mod tests {
             network: NetworkPolicy::Blocked,
             access: Vec::new(),
             audit: crate::config::AuditConfig::Disabled,
+            repo_profile: None,
         };
         let dir = tempfile::tempdir().expect("tempdir");
         let sealed = SealedCredentials {
@@ -296,6 +307,7 @@ mod tests {
             network: NetworkPolicy::Blocked,
             access: Vec::new(),
             audit: crate::config::AuditConfig::Disabled,
+            repo_profile: None,
         };
         let dir = tempfile::tempdir().expect("tempdir");
         let credential_file = dir.path().join("cratesio");
@@ -335,6 +347,7 @@ mod tests {
             network: NetworkPolicy::AllowDomains(vec!["index.crates.io".to_string()]),
             access: Vec::new(),
             audit: crate::config::AuditConfig::Disabled,
+            repo_profile: None,
         };
         let dir = tempfile::tempdir().expect("tempdir");
         let sealed = SealedCredentials {
@@ -355,6 +368,137 @@ mod tests {
         let json = serde_json::to_string(&profile).expect("json");
 
         assert!(json.contains(r#""allow_domain":["crates.io","index.crates.io"]"#));
+    }
+
+    fn repo_profile(json: &str) -> (tempfile::TempDir, crate::repo_profile::RepoProfile) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("runseal.json"), json).expect("write profile");
+        let profile =
+            crate::repo_profile::load("runseal.json", dir.path()).expect("repo profile loads");
+        (dir, profile)
+    }
+
+    fn profile_mode_config(
+        network: NetworkPolicy,
+        repo_profile: crate::repo_profile::RepoProfile,
+    ) -> RunConfig {
+        RunConfig {
+            command: "true".to_string(),
+            fs_read: Vec::new(),
+            fs_write: Vec::new(),
+            network,
+            access: Vec::new(),
+            audit: crate::config::AuditConfig::Disabled,
+            repo_profile: Some(repo_profile),
+        }
+    }
+
+    fn empty_sealed() -> SealedCredentials {
+        SealedCredentials {
+            dir: tempfile::tempdir().expect("tempdir"),
+            access: Vec::new(),
+            sanitized_env: BTreeMap::new(),
+        }
+    }
+
+    /// CI installs the manifest-pinned nono before explicitly running this test.
+    #[test]
+    #[ignore = "requires an installed nono; run in the profile integration CI job"]
+    fn staged_profiles_validate_with_real_nono() -> Result<()> {
+        for input in [
+            r#"{"meta":{"description":"Build sandbox"},"filesystem":{"read":["."]}}"#,
+            r#"{"meta":{}}"#,
+            r#"{"network":{"allow_domain":["example.com"]}}"#,
+            r#"{"network":{"block":true}}"#,
+        ] {
+            let workspace = tempfile::tempdir()?;
+            std::fs::write(workspace.path().join("runseal.json"), input)?;
+            let repo = crate::repo_profile::load("runseal.json", workspace.path())?;
+            let network = if repo.allows_domains() {
+                NetworkPolicy::FromRepoProfile
+            } else {
+                NetworkPolicy::Blocked
+            };
+            let sealed = SealedCredentials {
+                dir: tempfile::tempdir()?,
+                access: Vec::new(),
+                sanitized_env: BTreeMap::new(),
+            };
+            let sibling = repo.write_sibling(sealed.dir.path())?;
+            let config = profile_mode_config(network, repo);
+            let generated = sealed.dir.path().join("profile.json");
+            write_profile(&generated, &build_profile(&config, &sealed)?)?;
+            for path in [&sibling, &generated] {
+                let output = std::process::Command::new("nono")
+                    .args(["profile", "validate"])
+                    .arg(path)
+                    .env("NONO_NO_MIGRATE", "1")
+                    .output()?;
+                assert!(output.status.success(), "{}: {output:?}", path.display());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn generated_profile_extends_only_default_without_a_repo_profile() {
+        let config = RunConfig {
+            command: "true".to_string(),
+            fs_read: vec![".".to_string()],
+            fs_write: Vec::new(),
+            network: NetworkPolicy::Blocked,
+            access: Vec::new(),
+            audit: crate::config::AuditConfig::Disabled,
+            repo_profile: None,
+        };
+
+        let profile = build_profile(&config, &empty_sealed()).expect("profile");
+        let json: serde_json::Value = serde_json::to_value(&profile).expect("json");
+
+        assert_eq!(json["extends"], serde_json::json!(["default"]));
+    }
+
+    #[test]
+    fn generated_profile_extends_the_repo_profile_last_so_runseal_stays_the_child() {
+        let (_dir, repo) = repo_profile(r#"{"filesystem":{"read":["/usr"]}}"#);
+        let config = profile_mode_config(NetworkPolicy::Blocked, repo);
+
+        let profile = build_profile(&config, &empty_sealed()).expect("profile");
+        let json: serde_json::Value = serde_json::to_value(&profile).expect("json");
+
+        assert_eq!(
+            json["extends"],
+            serde_json::json!(["default", "runseal-repo"])
+        );
+    }
+
+    #[test]
+    fn profile_mode_without_domains_still_blocks_the_network() {
+        let (_dir, repo) = repo_profile(r#"{"filesystem":{"read":["/usr"]}}"#);
+        let config = profile_mode_config(NetworkPolicy::Blocked, repo);
+
+        let profile = build_profile(&config, &empty_sealed()).expect("profile");
+        let json: serde_json::Value = serde_json::to_value(&profile).expect("json");
+
+        assert_eq!(json["network"]["block"], true);
+    }
+
+    #[test]
+    fn profile_mode_with_domains_omits_block_entirely() {
+        let (_dir, repo) = repo_profile(r#"{"network":{"allow_domain":["example.com"]}}"#);
+        let config = profile_mode_config(NetworkPolicy::FromRepoProfile, repo);
+
+        let profile = build_profile(&config, &empty_sealed()).expect("profile");
+        let json: serde_json::Value = serde_json::to_value(&profile).expect("json");
+
+        assert!(
+            json["network"].get("block").is_none(),
+            "network.block must be absent: {json}"
+        );
+        assert!(
+            json["network"].get("allow_domain").is_none(),
+            "the repo profile owns the domain list: {json}"
+        );
     }
 
     #[test]

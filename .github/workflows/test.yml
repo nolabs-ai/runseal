@@ -16,7 +16,7 @@ jobs:
           persist-credentials: false
 
       - name: Basic sandbox
-        uses: always-further/runseal@main
+        uses: ./
         with:
           run: printf "runseal smoke ok\n"
           runseal-version: source
@@ -27,8 +27,24 @@ jobs:
             network:
               mode: blocked
 
+      - name: Write a repo profile
+        run: |
+          cat > runseal-smoke.json <<'JSON'
+          {
+            "meta": { "description": "Profile smoke test" },
+            "filesystem": { "read": ["."] }
+          }
+          JSON
+
+      - name: Sandbox from a repo profile
+        uses: ./
+        with:
+          run: printf "runseal profile smoke ok\n"
+          runseal-version: source
+          profile: runseal-smoke.json
+
       - name: Secret is not exposed to command
-        uses: always-further/runseal@main
+        uses: ./
         env:
           RUNSEAL_QA_API_TOKEN: ${{ secrets.RUNSEAL_QA_API_TOKEN }}
         with:

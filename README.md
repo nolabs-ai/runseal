@@ -46,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: nolabs-ai/runseal@v0.3.3
+      - uses: nolabs-ai/runseal@v0.3.4
         with:
           run: npm publish
           policy: |
@@ -184,12 +184,59 @@ ephemeral trust bundle and injects standard CA environment variables into the
 sandboxed process, so common HTTPS clients can connect through the proxy while
 still allowing L7 policy enforcement.
 
+## Repo Profile
+
+Instead of writing policy in the workflow, a repository can commit a
+[nono profile](https://nono.sh/docs/cli/features/profile-authoring) and point
+runseal at it:
+
+```yaml
+- run: mkdir -p node_modules
+- uses: nolabs-ai/runseal@main
+  with:
+    runseal-version: source
+    run: npm ci
+    profile: runseal.json
+```
+
+```json
+{
+  "meta": { "name": "my-repo" },
+  "filesystem": {
+    "read": ["./src", "./package.json"],
+    "write": ["./node_modules"]
+  },
+  "network": {
+    "allow_domain": ["registry.npmjs.org"]
+  }
+}
+```
+
+runseal layers this profile underneath the profile it generates. Runseal
+validates it, rewrites relative paths to absolute ones, and writes out its own
+copy.
+
+The `profile` input is mutually exclusive with `policy`, `fs-read`, `fs-write`,
+and `network`. Setting both is an error rather than a precedence rule.
+
+### Repo Profile Options
+
+| Key | Meaning |
+| --- | --- |
+| `$schema` | Schema hint for editors. |
+| `meta.name`, `meta.description` | Documentation for the profile. |
+| `filesystem.read`, `filesystem.write` | Directories the command may read or write. |
+| `filesystem.read_file`, `filesystem.write_file` | Single files the command may read or write. |
+| `filesystem.deny` | Paths to deny, on top of everything else. |
+| `network.allow_domain` | Hosts the command may reach. |
+| `network.block` | Only `true`. Network is already blocked by default. |
+
 ## Common Recipes
 
 ### Run Tests With No Network
 
 ```yaml
-- uses: nolabs-ai/runseal@v0.3.3
+- uses: nolabs-ai/runseal@v0.3.4
   with:
     run: npm test
     policy: |
@@ -203,7 +250,7 @@ still allowing L7 policy enforcement.
 ### Build With Package Registry Access
 
 ```yaml
-- uses: nolabs-ai/runseal@v0.3.3
+- uses: nolabs-ai/runseal@v0.3.4
   with:
     run: npm ci
     policy: |
@@ -219,7 +266,7 @@ still allowing L7 policy enforcement.
 ### Deploy With A Sealed Token
 
 ```yaml
-- uses: nolabs-ai/runseal@v0.3.3
+- uses: nolabs-ai/runseal@v0.3.4
   with:
     run: ./scripts/deploy.sh
     policy: |
@@ -245,10 +292,11 @@ still allowing L7 policy enforcement.
 | --- | --- | --- | --- |
 | `run` | Yes | none | Command to execute inside the sandbox. |
 | `policy` | No | empty | Runseal policy YAML. Prefer this for new workflows. |
+| `profile` | No | empty | Path to a nono profile in the repository, relative to the workspace. Mutually exclusive with `policy`, `fs-read`, `fs-write`, and `network`. See [Repo Profile](#repo-profile). |
 | `fs-read` | No | empty | Comma-separated read paths when `policy` is not set. |
 | `fs-write` | No | empty | Comma-separated write paths when `policy` is not set. |
-| `network` | No | `blocked` | Network policy when `policy` is not set: `blocked` or comma-separated domains. `filtered` is only valid as `network.mode` inside `policy` and is rejected here. |
-| `runseal-version` | No | `0.3.3` | Runseal release version to install. Accepts `v0.1.0` or `0.1.0`. |
+| `network` | No | empty (`blocked`) | Network policy when `policy` is not set: `blocked` or comma-separated domains. An empty value means `blocked`. `filtered` is only valid as `network.mode` inside `policy` and is rejected here. |
+| `runseal-version` | No | `0.3.4` | Runseal release version to install. Accepts `v0.1.0` or `0.1.0`. |
 | `nono-version` | No | pinned | nono release version to install. Defaults to the Dependabot-managed pin in `.github/nono-version/Cargo.toml`. Accepts `v0.1.0` or `0.1.0`. |
 | `verify-attestations` | No | `true` | Verify GitHub artifact attestations for downloaded release assets. |
 | `audit` | No | `false` | Set to `artifact` or `true` to upload nono audit evidence as a GitHub Actions artifact. |
@@ -258,7 +306,7 @@ still allowing L7 policy enforcement.
 Runseal can export the nono audit session for a sandboxed command:
 
 ```yaml
-- uses: nolabs-ai/runseal@v0.3.3
+- uses: nolabs-ai/runseal@v0.3.4
   with:
     run: npm rebuild
     audit: artifact

@@ -3,7 +3,7 @@ set -euo pipefail
 
 SETUP_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
-RUNSEAL_VERSION="${RUNSEAL_VERSION:-0.3.3}"
+RUNSEAL_VERSION="${RUNSEAL_VERSION:-0.3.4}"
 # Empty means "use the Dependabot-tracked pin"; resolved below via
 # scripts/nono-pinned-version.sh.
 NONO_VERSION="${NONO_VERSION:-}"

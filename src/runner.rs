@@ -8,9 +8,14 @@ use std::process::Command;
 pub fn run_nono(config: &RunConfig, sealed: &SealedCredentials, profile_path: &Path) -> Result<()> {
     let trusted_system_reads = trusted_system_read_paths();
     println!("::group::runseal sandbox configuration");
+    let (read_source, write_source) = if config.repo_profile.is_some() {
+        ("<from repo profile>", "<from repo profile>")
+    } else {
+        ("<workspace>", "<none>")
+    };
     println!(
         "  filesystem read:  {}",
-        display_list(&config.fs_read, "<workspace>")
+        display_list(&config.fs_read, read_source)
     );
     println!(
         "  system read:      {}",
@@ -18,7 +23,7 @@ pub fn run_nono(config: &RunConfig, sealed: &SealedCredentials, profile_path: &P
     );
     println!(
         "  filesystem write: {}",
-        display_list(&config.fs_write, "<none>")
+        display_list(&config.fs_write, write_source)
     );
     let fs_args = fs_args(config, &trusted_system_reads)?;
     println!("  nono fs args:     {}", display_fs_args(&fs_args));
@@ -29,6 +34,13 @@ pub fn run_nono(config: &RunConfig, sealed: &SealedCredentials, profile_path: &P
     );
     println!("  access grants:    {} configured", sealed.access.len());
     println!("  nono profile:     {}", profile_path.display());
+    if let Some(repo_profile) = &config.repo_profile {
+        println!("  repo profile:     {}", repo_profile.source().display());
+        println!("  repo profile as enforced:");
+        for line in repo_profile.to_json()?.lines() {
+            println!("    {line}");
+        }
+    }
     println!("::endgroup::");
 
     let mut command = Command::new("nono");
@@ -45,6 +57,7 @@ pub fn run_nono(config: &RunConfig, sealed: &SealedCredentials, profile_path: &P
 
     command.arg("--").arg("bash").arg("-c").arg(&config.command);
     command.env_clear().envs(&sealed.sanitized_env);
+    command.env("NONO_NO_MIGRATE", "1");
 
     let status = command.status().context("failed to spawn nono")?;
     if !status.success() {
@@ -160,6 +173,7 @@ fn display_network(network: &NetworkPolicy) -> String {
     match network {
         NetworkPolicy::Blocked => "blocked".to_string(),
         NetworkPolicy::AllowDomains(domains) => domains.join(", "),
+        NetworkPolicy::FromRepoProfile => "as declared by the repo profile".to_string(),
     }
 }
 
@@ -241,6 +255,7 @@ mod tests {
             network: NetworkPolicy::Blocked,
             access: Vec::new(),
             audit: crate::config::AuditConfig::Disabled,
+            repo_profile: None,
         };
 
         let args = fs_args(&config, std::slice::from_ref(&trusted)).expect("fs args");
