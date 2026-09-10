@@ -243,6 +243,7 @@ mod tests {
                 endpoint_rules: Vec::new(),
             }],
             audit: AuditConfig::Disabled,
+            repo_profile: None,
         };
 
         let err = seal_credentials(&config).expect_err("invalid grant name must fail");

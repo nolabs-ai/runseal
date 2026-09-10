@@ -107,3 +107,37 @@ jobs:
 
       - name: Run cargo audit
         run: make audit
+
+  profile-integration:
+    name: Profile integration (pinned nono)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+        with:
+          toolchain: stable
+
+      - name: Write a description-only profile
+        run: |
+          cat > runseal-smoke.json <<'JSON'
+          {
+            "meta": { "description": "Profile integration test" },
+            "filesystem": { "read": ["."] }
+          }
+          JSON
+
+      - name: Exercise the checked-out action
+        uses: ./
+        with:
+          runseal-version: source
+          profile: runseal-smoke.json
+          run: test -r Cargo.toml
+
+      - name: Validate staged profiles with pinned nono
+        run: |
+          test "$(nono --version)" = "nono $(bash scripts/nono-pinned-version.sh)"
+          cargo test --locked staged_profiles_validate_with_real_nono -- --ignored

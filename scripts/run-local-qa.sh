@@ -197,7 +197,7 @@ setup_lab() {
     cd "${LAB}"
     printf 'allowed\n' > allowed.txt
     printf 'blocked\n' > blocked.txt
-    rm -f new-file.txt dist/result.txt /tmp/runseal-example.html
+    rm -f new-file.txt dist/result.txt runseal.json /tmp/runseal-example.html
 }
 
 require_cmd cargo
@@ -240,6 +240,47 @@ if (cd "${LAB}" && RUNSEAL_RUN='echo ok > ./dist/result.txt' RUNSEAL_POLICY=$'fs
 if (cd "${LAB}" && RUNSEAL_RUN='curl -fsS https://example.com' RUNSEAL_POLICY=$'fs:\n  read: ["."]\n  write: []\nnetwork:\n  mode: blocked\n' "${RUNSEAL_BIN}" run >/tmp/runseal-qa.out 2>&1); then cat /tmp/runseal-qa.out; fail "network blocked"; else pass "network blocked"; fi
 
 if (cd "${LAB}" && RUNSEAL_RUN='curl -fsS https://example.com >/tmp/runseal-example.html' RUNSEAL_POLICY=$'fs:\n  read: ["."]\n  write: ["/tmp"]\nnetwork:\n  mode: filtered\n  allow:\n    - example.com\n' "${RUNSEAL_BIN}" run >/tmp/runseal-qa.out 2>&1) && [[ -s /tmp/runseal-example.html ]]; then pass "network allowlist"; else cat /tmp/runseal-qa.out; fail "network allowlist"; fi
+
+log "repo profile scenarios"
+rm -f "${LAB}/dist/result.txt" "${LAB}/runseal.json"
+cat > "${LAB}/runseal.json" <<'JSON'
+{
+  "meta": { "name": "runseal-qa" },
+  "filesystem": {
+    "read": ["."],
+    "write": ["./dist"]
+  }
+}
+JSON
+if (cd "${LAB}" && RUNSEAL_RUN='echo ok > ./dist/result.txt' RUNSEAL_PROFILE=runseal.json "${RUNSEAL_BIN}" run >/tmp/runseal-qa.out 2>&1) && grep -q '^ok$' "${LAB}/dist/result.txt"; then pass "repo profile write allowed"; else cat /tmp/runseal-qa.out; fail "repo profile write allowed"; fi
+
+rm -f "${LAB}/new-file.txt"
+if (cd "${LAB}" && RUNSEAL_RUN='echo nope > ./new-file.txt' RUNSEAL_PROFILE=runseal.json "${RUNSEAL_BIN}" run >/tmp/runseal-qa.out 2>&1); then cat /tmp/runseal-qa.out; fail "repo profile write denied outside grant"; elif [[ ! -e "${LAB}/new-file.txt" ]]; then pass "repo profile write denied outside grant"; else fail "repo profile write denied outside grant"; fi
+
+if (cd "${LAB}" && RUNSEAL_RUN='curl -fsS https://example.com' RUNSEAL_PROFILE=runseal.json "${RUNSEAL_BIN}" run >/tmp/runseal-qa.out 2>&1); then cat /tmp/runseal-qa.out; fail "repo profile blocks network by default"; else pass "repo profile blocks network by default"; fi
+
+rm -f /tmp/runseal-example.html
+cat > "${LAB}/runseal.json" <<'JSON'
+{
+  "filesystem": {
+    "read": ["."],
+    "write": ["/tmp"]
+  },
+  "network": {
+    "allow_domain": ["example.com"]
+  }
+}
+JSON
+if (cd "${LAB}" && RUNSEAL_RUN='curl -fsS https://example.com >/tmp/runseal-example.html' RUNSEAL_PROFILE=runseal.json "${RUNSEAL_BIN}" run >/tmp/runseal-qa.out 2>&1) && [[ -s /tmp/runseal-example.html ]]; then pass "repo profile network allowlist"; else cat /tmp/runseal-qa.out; fail "repo profile network allowlist"; fi
+
+cat > "${LAB}/runseal.json" <<'JSON'
+{ "session_hooks": { "before": "/tmp/runseal-qa-hook.sh" } }
+JSON
+if (cd "${LAB}" && RUNSEAL_RUN='printf "ran\n"' RUNSEAL_PROFILE=runseal.json "${RUNSEAL_BIN}" run >/tmp/runseal-qa.out 2>&1); then cat /tmp/runseal-qa.out; fail "repo profile capability grant rejected"; elif grep -q 'session_hooks' /tmp/runseal-qa.out; then pass "repo profile capability grant rejected"; else cat /tmp/runseal-qa.out; fail "repo profile capability grant rejected"; fi
+
+if (cd "${LAB}" && RUNSEAL_RUN='printf "ran\n"' RUNSEAL_PROFILE=runseal.json RUNSEAL_POLICY=$'fs:\n  read: ["."]\n' "${RUNSEAL_BIN}" run >/tmp/runseal-qa.out 2>&1); then cat /tmp/runseal-qa.out; fail "repo profile and policy conflict"; elif grep -q 'exactly one policy source' /tmp/runseal-qa.out; then pass "repo profile and policy conflict"; else cat /tmp/runseal-qa.out; fail "repo profile and policy conflict"; fi
+
+rm -f "${LAB}/runseal.json"
 
 log "secret environment scenarios"
 if (cd "${LAB}" && API_TOKEN='real-secret-value' RUNSEAL_RUN='printf "API_TOKEN=<%s>\n" "$API_TOKEN"' RUNSEAL_POLICY=$'fs:\n  read: ["."]\n  write: []\nnetwork:\n  mode: filtered\naccess:\n  api:\n    secret: API_TOKEN\n    url: https://example.com\n    allow:\n      - GET /**\n' "${RUNSEAL_BIN}" run >/tmp/runseal-qa.out 2>&1) && grep -q 'API_TOKEN=<>' /tmp/runseal-qa.out; then pass "secret stripped from env"; else cat /tmp/runseal-qa.out; fail "secret stripped from env"; fi
