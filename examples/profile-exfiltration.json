@@ -1,0 +1,14 @@
+{
+  "meta": {
+    "name": "profile-exfiltration-demo",
+    "description": "Allow build inputs while denying a dummy production credential"
+  },
+  "filesystem": {
+    "read": ["./src"],
+    "read_file": ["./Cargo.toml"],
+    "deny": ["./.env.production"]
+  },
+  "network": {
+    "block": true
+  }
+}
