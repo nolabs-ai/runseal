@@ -1,0 +1,42 @@
+name: Bug report
+description: Report a reproducible, non-sensitive Runseal failure.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report vulnerabilities or attach secrets here. Follow [SECURITY.md](https://github.com/nolabs-ai/runseal/blob/main/SECURITY.md) for private reporting.
+  - type: input
+    id: versions
+    attributes:
+      label: Runseal and nono versions
+      description: Include the action SHA or tag and any version overrides.
+    validations:
+      required: true
+  - type: input
+    id: runner
+    attributes:
+      label: Runner environment
+      description: Runner label, image version, architecture, and kernel version (uname -r).
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: A minimal workflow, profile or policy, and command. Use fake credentials only.
+    validations:
+      required: true
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: Expected and actual behaviour
+      description: Include redacted errors and the last known working version, if any.
+    validations:
+      required: true
+  - type: checkboxes
+    id: redaction
+    attributes:
+      label: Safe to share
+      options:
+        - label: I removed credentials, private data, and sensitive audit output.
+          required: true

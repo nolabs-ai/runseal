@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security policy
+    url: https://github.com/nolabs-ai/runseal/blob/main/SECURITY.md
+    about: Read the private vulnerability reporting instructions before sharing security details.
+  - name: Community support
+    url: https://discord.gg/pPcjYzGvbS
+    about: Ask usage questions without sharing secrets or private vulnerability details.
