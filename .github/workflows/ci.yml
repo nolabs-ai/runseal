@@ -44,6 +44,9 @@ jobs:
       - name: Run tests
         run: make test VERBOSE=1
 
+      - name: Test draft release publication without network access
+        run: python3 -m unittest discover -s tests -p 'test_release.py'
+
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest

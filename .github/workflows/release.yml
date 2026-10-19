@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
 
+# Serialise reruns for the same tag while a draft is assembled and verified.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -58,29 +63,10 @@ jobs:
             ${{ steps.package.outputs.asset }}
             dist/SHA256SUMS
 
-      - name: Upload release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
-            gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes "Runseal ${GITHUB_REF_NAME}"
-          gh release upload "${GITHUB_REF_NAME}" dist/*.tar.gz dist/SHA256SUMS --clobber
+      - name: Verify draft release publication logic
+        run: python3 -m unittest discover -s tests -p 'test_release.py'
 
-      - name: Verify published assets are installable
+      - name: Verify and publish draft release
         env:
           GH_TOKEN: ${{ github.token }}
-          ASSET: ${{ steps.package.outputs.asset_name }}
-        run: |
-          set -euo pipefail
-          published="$(gh release view "${GITHUB_REF_NAME}" --json assets -q '.assets[].name')"
-          for required in "${ASSET}" SHA256SUMS; do
-            if ! printf '%s\n' "${published}" | grep -Fxq "${required}"; then
-              echo "::error::release ${GITHUB_REF_NAME} is missing required asset '${required}'"
-              exit 1
-            fi
-          done
-          gh attestation verify "${{ steps.package.outputs.asset }}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --signer-repo "${GITHUB_REPOSITORY}"
-          echo "published assets verified: ${published//$'\n'/, }"
+        run: bash scripts/publish-release.sh "${GITHUB_REF_NAME}" "${{ steps.package.outputs.asset }}" dist/SHA256SUMS
