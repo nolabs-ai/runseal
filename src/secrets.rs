@@ -319,7 +319,14 @@ mod tests {
         let secret = "runseal-regression-canary";
         fs::write(&credential_file, secret)?;
         fs::set_permissions(&credential_file, fs::Permissions::from_mode(0o600))?;
+        // An empty config root prevents reading a developer's platform enrollment
+        // and shipping this local canary audit to a configured cloud service.
+        let config_root = tempfile::tempdir()?;
         let mut sanitized_env: BTreeMap<String, String> = env::vars().collect();
+        sanitized_env.insert(
+            "XDG_CONFIG_HOME".to_string(),
+            config_root.path().display().to_string(),
+        );
         sanitized_env.remove("API_TOKEN");
         sanitized_env.insert(
             "SEALED_FILE".to_string(),
