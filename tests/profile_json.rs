@@ -4,6 +4,57 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_secrets_stay_outside_shared_tmp_even_when_tmpdir_points_there() -> anyhow::Result<()> {
+    let run = run_runseal(
+        &[],
+        &[
+            ("TMPDIR", "/tmp"),
+            (
+                "RUNSEAL_POLICY",
+                r#"
+network:
+  mode: filtered
+access:
+  api:
+    secret: CARGO_REGISTRY_TOKEN
+    url: https://example.com
+    allow: ["GET /allowed"]
+"#,
+            ),
+        ],
+    );
+    assert!(
+        run.output.status.success(),
+        "runseal failed: {:?}",
+        run.output
+    );
+    let profile = read_profile_json(&run.captured_profile);
+    let key = profile["network"]["custom_credentials"]["api"]["credential_key"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing credential key"))?;
+    let file = Path::new(
+        key.strip_prefix("file://")
+            .ok_or_else(|| anyhow::anyhow!("credential key must be a file"))?,
+    );
+    let directory = file
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("missing credential directory"))?;
+    assert_eq!(
+        directory.parent(),
+        Some(fs::canonicalize("/var/tmp")?.as_path())
+    );
+    assert!(!directory.starts_with(fs::canonicalize("/tmp")?));
+    assert!(profile["filesystem"]["deny"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing deny paths"))?
+        .iter()
+        .any(|path| path.as_str() == directory.to_str()));
+    assert!(!directory.exists(), "sealed directory must be cleaned up");
+    Ok(())
+}
+
 #[test]
 fn blocked_network_with_credentials_emits_block_true_profile_json() {
     let policy = r#"

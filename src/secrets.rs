@@ -33,10 +33,7 @@ pub struct SealedCredential {
 }
 
 pub fn seal_credentials(config: &RunConfig) -> Result<SealedCredentials> {
-    let dir = tempfile::Builder::new()
-        .prefix("runseal-creds.")
-        .tempdir()?;
-    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700))?;
+    let dir = credential_directory(!config.access.is_empty())?;
 
     let secret_names: HashSet<&str> = config.access.iter().map(|c| c.secret.as_str()).collect();
     let sanitized_env = sanitize_env(&secret_names);
@@ -73,6 +70,31 @@ pub fn seal_credentials(config: &RunConfig) -> Result<SealedCredentials> {
         access: sealed,
         sanitized_env,
     })
+}
+
+/// Keep Linux credentials outside nono's inherited `/tmp` and `$TMPDIR` grants.
+/// Landlock cannot subtract a private child directory from a broader grant.
+/// nono correctly refuses such overlapping policies. Retain the explicit deny
+/// as well, so a user grant overlapping this directory still fails closed.
+#[must_use = "credential storage failures must abort the run"]
+fn credential_directory(has_access: bool) -> Result<TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("runseal-creds.");
+    let dir = if cfg!(target_os = "linux") && has_access {
+        // Deliberately ignore TMPDIR for secret storage. Do not fall back to
+        // the shared /tmp grant if this separate location is unavailable.
+        let base = fs::canonicalize("/var/tmp")
+            .context("failed to canonicalize Linux credential storage /var/tmp")?;
+        builder
+            .tempdir_in(base)
+            .context("failed to create private Linux credential storage in /var/tmp")?
+    } else {
+        builder
+            .tempdir()
+            .context("failed to create runseal staging directory")?
+    };
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700))?;
+    Ok(dir)
 }
 
 /// Sanitize the environment, discarding secrets and internal inputs.
@@ -200,6 +222,182 @@ mod tests {
     use crate::config::{AccessConfig, AuditConfig, NetworkPolicy, SupportedInjectMode};
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
+
+    #[test]
+    fn credential_storage_is_private_and_outside_linux_shared_tmp() -> Result<()> {
+        let dir = credential_directory(true)?;
+        assert_eq!(
+            fs::metadata(dir.path())?.permissions().mode() & 0o777,
+            0o700
+        );
+        if cfg!(target_os = "linux") {
+            assert_eq!(
+                dir.path().parent(),
+                Some(fs::canonicalize("/var/tmp")?.as_path())
+            );
+            assert!(!dir.path().starts_with(fs::canonicalize("/tmp")?));
+        }
+        let path = dir.path().to_path_buf();
+        drop(dir);
+        assert!(!path.exists(), "credentials must be removed after use");
+        Ok(())
+    }
+
+    /// Run on Linux with the manifest-pinned nono installed
+    #[test]
+    #[ignore = "requires Linux Landlock and the manifest-pinned nono on PATH"]
+    fn linux_sealed_credentials_with_real_nono() -> Result<()> {
+        use crate::config::{AccessConfig, EndpointRule};
+        use std::io::Read;
+        use std::net::TcpListener;
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
+
+        if !cfg!(target_os = "linux") {
+            bail!("this regression requires Linux Landlock");
+        }
+        let version = std::process::Command::new("nono")
+            .arg("--version")
+            .output()?;
+        assert!(
+            version.status.success(),
+            "nono --version failed: {version:?}"
+        );
+        let pinned = include_str!("../.github/nono-version/Cargo.toml");
+        let pinned = pinned
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("nono-cli = "))
+            .context("missing pinned nono version")?
+            .trim_matches('"')
+            .trim_start_matches('=');
+        assert_eq!(
+            String::from_utf8(version.stdout)?.trim(),
+            format!("nono {pinned}")
+        );
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        listener.set_nonblocking(true)?;
+        let upstream = format!("http://{}", listener.local_addr()?);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&requests);
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server_stop = Arc::clone(&stop);
+        let server = std::thread::spawn(move || -> Result<()> {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !server_stop.load(std::sync::atomic::Ordering::Relaxed)
+                && Instant::now() < deadline
+            {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+                        let mut request = Vec::new();
+                        let mut byte = [0];
+                        while !request.ends_with(b"\r\n\r\n") {
+                            if stream.read(&mut byte)? == 0 || request.len() >= 16 * 1024 {
+                                bail!("incomplete upstream request");
+                            }
+                            request.push(byte[0]);
+                        }
+                        captured
+                            .lock()
+                            .map_err(|_| anyhow::anyhow!("request lock poisoned"))?
+                            .push(String::from_utf8(request)?);
+                        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nok\n")?;
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Ok(())
+        });
+
+        // Construct a sealed fixture without modifying this process's environment.
+        // Expose its location deliberately: hiding the random name is not the boundary.
+        let dir = credential_directory(true)?;
+        let credential_file = dir.path().join("api");
+        let secret = "runseal-regression-canary";
+        fs::write(&credential_file, secret)?;
+        fs::set_permissions(&credential_file, fs::Permissions::from_mode(0o600))?;
+        let mut sanitized_env: BTreeMap<String, String> = env::vars().collect();
+        sanitized_env.remove("API_TOKEN");
+        sanitized_env.insert(
+            "SEALED_FILE".to_string(),
+            credential_file.display().to_string(),
+        );
+        // Exercise the inherited /tmp grant which caused the original failure.
+        sanitized_env.insert("TMPDIR".to_string(), "/tmp".to_string());
+        let rules = vec![EndpointRule {
+            method: "GET".parse()?,
+            path: "/allowed".to_string(),
+        }];
+        let sealed = SealedCredentials {
+            dir,
+            access: vec![SealedCredential {
+                name: "api".to_string(),
+                secret_env: "API_TOKEN".to_string(),
+                upstream: upstream.clone(),
+                tls_ca: None,
+                inject_mode: SupportedInjectMode::Header,
+                credential_file,
+                endpoint_rules: rules.clone(),
+            }],
+            sanitized_env,
+        };
+        let config = RunConfig {
+            command: r#"set -eu
+if cat "$SEALED_FILE" >/dev/null 2>&1; then
+    echo 'sandbox read a sealed credential' >&2
+    exit 1
+fi
+test -n "$API_TOKEN"
+test "$API_TOKEN" != runseal-regression-canary
+curl --max-time 10 -fsS -H "Authorization: Bearer $API_TOKEN" "$API_BASE_URL/allowed"
+if curl --max-time 10 -fsS -H "Authorization: Bearer $API_TOKEN" "$API_BASE_URL/denied"; then
+    echo 'denied route unexpectedly succeeded' >&2
+    exit 1
+fi
+"#
+            .to_string(),
+            fs_read: vec!["/tmp".to_string()],
+            fs_write: Vec::new(),
+            network: NetworkPolicy::AllowDomains(Vec::new()),
+            access: vec![AccessConfig {
+                name: "api".to_string(),
+                secret: "API_TOKEN".to_string(),
+                upstream,
+                tls_ca: None,
+                inject_mode: SupportedInjectMode::Header,
+                endpoint_rules: rules,
+            }],
+            audit: AuditConfig::Disabled,
+            repo_profile: None,
+        };
+        let profile_path = sealed.dir.path().join("profile.json");
+        crate::profile::write_profile(
+            &profile_path,
+            &crate::profile::build_profile(&config, &sealed)?,
+        )?;
+        let result = crate::runner::run_nono(&config, &sealed, &profile_path);
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        server
+            .join()
+            .map_err(|_| anyhow::anyhow!("upstream thread panicked"))??;
+        result?;
+        let requests = requests
+            .lock()
+            .map_err(|_| anyhow::anyhow!("request lock poisoned"))?;
+        assert_eq!(
+            requests.len(),
+            1,
+            "denied requests must not reach upstream: {requests:?}"
+        );
+        assert!(requests[0].starts_with("GET /allowed HTTP/1.1\r\n"));
+        assert!(requests[0]
+            .to_ascii_lowercase()
+            .contains(&format!("authorization: bearer {secret}\r\n")));
+        Ok(())
+    }
 
     #[test]
     fn validates_safe_access_grant_names() {
