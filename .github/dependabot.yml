@@ -20,8 +20,10 @@ updates:
           - "*"
 
   # The nono release binary this action installs.
+  # Keep its manifest outside .github: the previous updater detected releases
+  # but GitHub rejected PR creation with dependency_file_not_supported.
   - package-ecosystem: cargo
-    directory: /.github/nono-version
+    directory: /tooling/nono-version
     schedule:
       interval: daily
     commit-message:

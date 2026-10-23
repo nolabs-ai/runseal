@@ -1,4 +1,7 @@
 /target/
 /.DS_Store
 /runseal-lab/
+# Preserve generated lockfiles in checkouts using the old manifest location.
 /.github/nono-version/Cargo.lock
+/tooling/nono-version/Cargo.lock
+/tooling/nono-version/target/

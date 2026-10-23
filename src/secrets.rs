@@ -263,7 +263,7 @@ mod tests {
             version.status.success(),
             "nono --version failed: {version:?}"
         );
-        let pinned = include_str!("../.github/nono-version/Cargo.toml");
+        let pinned = include_str!("../tooling/nono-version/Cargo.toml");
         let pinned = pinned
             .lines()
             .find_map(|line| line.trim().strip_prefix("nono-cli = "))

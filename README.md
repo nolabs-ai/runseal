@@ -297,7 +297,7 @@ and `network`. Setting both is an error rather than a precedence rule.
 | `fs-write` | No | empty | Comma-separated write paths when `policy` is not set. |
 | `network` | No | empty (`blocked`) | Network policy when `policy` is not set: `blocked` or comma-separated domains. An empty value means `blocked`. `filtered` is only valid as `network.mode` inside `policy` and is rejected here. |
 | `runseal-version` | No | `0.3.4` | Runseal release version to install. Accepts `v0.1.0` or `0.1.0`. |
-| `nono-version` | No | pinned | nono release version to install. Defaults to the Dependabot-managed pin in `.github/nono-version/Cargo.toml`. Accepts `v0.1.0` or `0.1.0`. |
+| `nono-version` | No | pinned | nono release version to install. Defaults to the Dependabot-managed pin in `tooling/nono-version/Cargo.toml`. Accepts `v0.1.0` or `0.1.0`. |
 | `verify-attestations` | No | `true` | Verify GitHub artifact attestations for downloaded release assets. |
 | `audit` | No | `false` | Set to `artifact` or `true` to upload nono audit evidence as a GitHub Actions artifact. |
 

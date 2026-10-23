@@ -23,6 +23,7 @@ build:
 
 test:
 	$(CARGO) test $(TEST_FLAGS)
+	python3 -m unittest discover -s tests -p 'test_nono_pin.py'
 
 check: clippy fmt-check version-check
 
