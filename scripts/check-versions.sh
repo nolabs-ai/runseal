@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Fails if the runseal or nono version drifts between the places that pin it.
-# Cargo.toml is the source of truth for runseal; .github/nono-version/Cargo.toml
+# Cargo.toml is the source of truth for runseal; tooling/nono-version/Cargo.toml
 # is the Dependabot-managed source of truth for nono.
 
 set -euo pipefail
@@ -41,7 +41,7 @@ if [[ -z "${RUNSEAL_VERSION}" ]]; then
     exit 1
 fi
 
-NONO_MANIFEST=".github/nono-version/Cargo.toml"
+NONO_MANIFEST="tooling/nono-version/Cargo.toml"
 NONO_VERSION="$(bash scripts/nono-pinned-version.sh)"
 
 printf 'runseal %s (Cargo.toml) · nono %s (%s)\n\n' \

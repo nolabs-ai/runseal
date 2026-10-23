@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Print the nono version pinned for this action in .github/nono-version/Cargo.toml.
+# Print the nono version pinned for this action in tooling/nono-version/Cargo.toml.
 
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-manifest="${1:-${script_dir}/../.github/nono-version/Cargo.toml}"
+manifest="${1:-${script_dir}/../tooling/nono-version/Cargo.toml}"
 
 if [[ ! -f "${manifest}" ]]; then
     echo "::error::nono version pin ${manifest} not found; pass nono-version explicitly" >&2
