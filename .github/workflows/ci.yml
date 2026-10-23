@@ -144,3 +144,6 @@ jobs:
         run: |
           test "$(nono --version)" = "nono $(bash scripts/nono-pinned-version.sh)"
           cargo test --locked staged_profiles_validate_with_real_nono -- --ignored
+
+      - name: Export the exact failed session with pinned nono
+        run: cargo test --locked --test audit_export real_nono_exports_exact_failed_session -- --ignored --exact
