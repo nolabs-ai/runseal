@@ -20,10 +20,6 @@ We built runseal in response to the rise of supply chain attacks targeting GitHu
 
 From the same folks who brought you [sigstore](https://sigstore.dev) and [nono](https://nono.sh).
 
-> [!WARNING]
-> **Early Alpha Software**
-> This project is in early alpha and under active development. Expect bugs, breaking changes, and incomplete features and a series of follow-up security audits. Therefore consider this an early preview until this note is updated.
-
 ## What Runseal Does
 
 - Replace real secrets within a workflow with session scoped phantom credentials that are useless if ever leaked
