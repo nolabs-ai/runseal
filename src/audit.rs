@@ -1,174 +1,222 @@
+//! Export only the audit session explicitly assigned to this invocation.
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
-use std::collections::BTreeSet;
-use std::fs;
-use std::path::Path;
+use rustix::fs::{open, openat, Mode, OFlags};
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[derive(Debug, Clone)]
-pub struct AuditSnapshot {
-    sessions: Vec<String>,
+/// This is an internal interface of the manifest-pinned nono. Its regular run
+/// path reads this variable before creating the audit session:
+/// https://github.com/nolabs-ai/nono/blob/v0.75.0/crates/nono-cli/src/launch_runtime.rs#L417
+/// A version ignoring it fails export rather than substituting another session.
+pub const SESSION_ENV: &str = "NONO_DETACHED_SESSION_ID";
+
+enum ExportFile {
+    Evidence,
+    Summary,
 }
 
-pub struct AuditExport {
-    pub sessions: Vec<String>,
-    pub used_latest_fallback: bool,
+pub struct AuditRun {
+    session: String,
+    output_base: PathBuf,
+    output_dir: PathBuf,
+    directory: File,
+    directory_identity: (u64, u64),
 }
 
-impl AuditSnapshot {
-    pub fn capture() -> Self {
-        Self {
-            sessions: audit_sessions().unwrap_or_default(),
+impl AuditRun {
+    #[must_use = "audit setup errors must abort the requested audited run"]
+    pub fn prepare(base: &Path) -> Result<Self> {
+        fs::create_dir_all(base).context("failed to create audit output base")?;
+        let base = base
+            .canonicalize()
+            .context("failed to canonicalize audit output base")?;
+        let directory = tempfile::Builder::new()
+            .prefix("runseal-audit-")
+            .tempdir_in(&base)
+            .context("failed to create unique audit output directory")?;
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
+        let metadata = fs::metadata(directory.path())?;
+        let directory_identity = (metadata.dev(), metadata.ino());
+        let directory_handle = File::from(open(
+            directory.path(),
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?);
+        let opened = directory_handle.metadata()?;
+        if (opened.dev(), opened.ino()) != directory_identity {
+            bail!("audit output directory changed during setup");
         }
+        let session = directory
+            .path()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("audit output directory name is not UTF-8")?
+            .to_string();
+        validate_session_id(&session)?;
+        let output_dir = directory.keep();
+        Ok(Self {
+            session,
+            output_base: base,
+            output_dir,
+            directory: directory_handle,
+            directory_identity,
+        })
     }
 
-    pub fn new_sessions_since(&self) -> AuditExport {
-        let after = audit_sessions().unwrap_or_default();
-        let before: BTreeSet<&str> = self.sessions.iter().map(String::as_str).collect();
-        let mut sessions = after
-            .iter()
-            .filter(|session| !before.contains(session.as_str()))
-            .cloned()
-            .collect::<Vec<_>>();
+    pub fn session(&self) -> &str {
+        &self.session
+    }
 
-        let used_latest_fallback = sessions.is_empty();
-        if used_latest_fallback {
-            if let Some(latest) = after.first() {
-                sessions.push(latest.clone());
+    pub fn output_base(&self) -> &Path {
+        &self.output_base
+    }
+
+    /// Publish before execution, so a failed command still has an upload path.
+    #[must_use = "failed action outputs must abort the audited run"]
+    pub fn publish_outputs(&self) -> Result<()> {
+        if let Some(path) = std::env::var_os("GITHUB_OUTPUT") {
+            let path = Path::new(&path)
+                .canonicalize()
+                .context("failed to canonicalize GITHUB_OUTPUT")?;
+            if !path.is_file() {
+                bail!("GITHUB_OUTPUT must be an existing regular file");
             }
+            let mut output = OpenOptions::new().append(true).open(path)?;
+            let directory = self
+                .output_dir
+                .to_str()
+                .context("audit output path is not UTF-8")?;
+            if directory.contains(['\r', '\n']) {
+                bail!("audit output path contains a newline");
+            }
+            writeln!(output, "audit-directory={directory}")?;
+            writeln!(output, "audit-artifact-name={}", self.session)?;
+            writeln!(output, "audit-session-id={}", self.session)?;
         }
-
-        AuditExport {
-            sessions,
-            used_latest_fallback,
-        }
-    }
-}
-
-pub fn export_sessions(export: &AuditExport, output_dir: &Path) -> Result<()> {
-    fs::create_dir_all(output_dir).with_context(|| {
-        format!(
-            "failed to create audit output dir '{}'",
-            output_dir.display()
-        )
-    })?;
-
-    let mut summary = String::new();
-    summary.push_str("# Runseal Audit Export\n\n");
-
-    if export.sessions.is_empty() {
-        summary.push_str("No new nono audit sessions were detected.\n");
+        println!("Runseal audit directory: {}", self.output_dir.display());
+        Ok(())
     }
 
-    if export.used_latest_fallback && !export.sessions.is_empty() {
-        summary.push_str(
-            "No before/after session diff was detected; exported latest visible session.\n\n",
-        );
-    }
-
-    for session in &export.sessions {
-        validate_session_id(session)?;
-        let json = Command::new("nono")
-            .arg("audit")
-            .arg("show")
-            .arg(session)
-            .arg("--json")
-            .output()
-            .with_context(|| format!("failed to run nono audit show {session} --json"))?;
-
-        if json.status.success() {
-            fs::write(output_dir.join(format!("{session}.json")), json.stdout)
-                .with_context(|| format!("failed to write audit JSON for session {session}"))?;
-            summary.push_str(&format!("- `{session}.json`\n"));
+    #[must_use = "missing or invalid audit evidence must fail the audited run"]
+    pub fn export(&self, command: &str, command_failed: bool) -> Result<()> {
+        self.validate_output_directory()?;
+        let result = self.export_json(command);
+        let outcome = if command_failed {
+            "failed"
         } else {
-            let stderr = String::from_utf8_lossy(&json.stderr);
-            fs::write(
-                output_dir.join(format!("{session}.error.txt")),
-                stderr.as_bytes(),
+            "succeeded"
+        };
+        let summary = match &result {
+            Ok(()) => format!(
+                "# Runseal Audit Export\n\nCommand {outcome}.\n\nExported the explicitly assigned session `{}` to `{}.json`.\n",
+                self.session, self.session
+            ),
+            Err(error) => format!(
+                "# Runseal Audit Export\n\nCommand {outcome}.\n\nAudit export failed: {error:#}\n\nNo other session was substituted.\n"
+            ),
+        };
+        let summary_result = self.write_new(ExportFile::Summary, summary.as_bytes());
+        // Writes stay anchored to the original directory even if its pathname
+        // changes. Refuse success if the action's published path was replaced.
+        self.validate_output_directory()?;
+        match (result, summary_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Err(export), Err(summary)) => bail!(
+                "audit export failed: {export:#}; writing failure summary also failed: {summary:#}"
+            ),
+        }
+    }
+
+    fn validate_output_directory(&self) -> Result<()> {
+        let metadata = fs::symlink_metadata(&self.output_dir)?;
+        if !metadata.is_dir()
+            || (metadata.dev(), metadata.ino()) != self.directory_identity
+            || self.output_dir.canonicalize()? != self.output_dir
+        {
+            bail!("audit output directory changed during execution");
+        }
+        Ok(())
+    }
+
+    fn export_json(&self, command: &str) -> Result<()> {
+        let output = Command::new("nono")
+            .args(["audit", "show", &self.session, "--json"])
+            .env("NONO_NO_MIGRATE", "1")
+            .output()
+            .context("failed to run nono audit show for assigned session")?;
+        if !output.status.success() {
+            bail!(
+                "no audit evidence for assigned session '{}': nono audit show exited with {}: {}",
+                self.session,
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .context("nono audit show did not return valid JSON")?;
+        validate_evidence(&json, &self.session, command)?;
+        self.write_new(ExportFile::Evidence, &output.stdout)
+    }
+
+    #[must_use = "audit write failures must be reported"]
+    fn write_new(&self, export: ExportFile, bytes: &[u8]) -> Result<()> {
+        // Filenames are fixed or derived from our validated session ID; callers
+        // cannot supply paths. O_EXCL refuses existing entries and symlinks.
+        let name = match export {
+            ExportFile::Evidence => format!("{}.json", self.session),
+            ExportFile::Summary => "summary.md".to_string(),
+        };
+        let mut file = File::from(
+            openat(
+                &self.directory,
+                name.as_str(),
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::RUSR | Mode::WUSR,
             )
-            .with_context(|| format!("failed to write audit error for session {session}"))?;
-            summary.push_str(&format!("- `{session}.error.txt`\n"));
-        }
+            .with_context(|| format!("failed to create audit export '{name}'"))?,
+        );
+        file.write_all(bytes)
+            .with_context(|| format!("failed to write audit export '{name}'"))
     }
+}
 
-    fs::write(output_dir.join("summary.md"), summary).with_context(|| {
-        format!(
-            "failed to write audit summary in '{}'",
-            output_dir.display()
-        )
-    })?;
+fn validate_evidence(json: &serde_json::Value, session: &str, command: &str) -> Result<()> {
+    validate_session_id(session)?;
+    if json.get("session_id").and_then(serde_json::Value::as_str) != Some(session) {
+        bail!("audit JSON does not identify the assigned session '{session}'");
+    }
+    let argv = json
+        .get("command")
+        .and_then(serde_json::Value::as_array)
+        .context("audit JSON has no command array")?;
+    // nono may resolve bash to an absolute executable path.
+    let shell = argv.first().and_then(serde_json::Value::as_str);
+    if argv.len() != 3
+        || shell
+            .and_then(|shell| Path::new(shell).file_name())
+            .is_none_or(|shell| shell != "bash")
+        || argv.get(1).and_then(serde_json::Value::as_str) != Some("-c")
+        || argv.get(2).and_then(serde_json::Value::as_str) != Some(command)
+    {
+        bail!("audit JSON command does not match this invocation");
+    }
     Ok(())
-}
-
-fn audit_sessions() -> Result<Vec<String>> {
-    let output = Command::new("nono")
-        .arg("audit")
-        .arg("list")
-        .arg("--json")
-        .output()
-        .context("failed to run nono audit list")?;
-
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return parse_audit_list_json(&stdout);
-    }
-
-    let output = Command::new("nono")
-        .arg("audit")
-        .arg("list")
-        .output()
-        .context("failed to run nono audit list fallback")?;
-
-    if !output.status.success() {
-        return Ok(Vec::new());
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    Ok(format!("{stdout}\n{stderr}")
-        .lines()
-        .filter_map(parse_session_id)
-        .map(ToOwned::to_owned)
-        .collect())
-}
-
-#[derive(Deserialize)]
-struct AuditListEntry {
-    session_id: String,
-}
-
-fn parse_audit_list_json(output: &str) -> Result<Vec<String>> {
-    if output.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let entries: Vec<AuditListEntry> =
-        serde_json::from_str(output).context("failed to parse nono audit list --json output")?;
-    let mut sessions = Vec::new();
-    for entry in entries {
-        if entry.session_id.trim().is_empty() {
-            continue;
-        }
-        validate_session_id(&entry.session_id)?;
-        sessions.push(entry.session_id);
-    }
-    Ok(sessions)
-}
-
-fn parse_session_id(line: &str) -> Option<&str> {
-    line.split_whitespace()
-        .find(|part| is_valid_session_id(part))
 }
 
 fn validate_session_id(session: &str) -> Result<()> {
-    if !is_valid_session_id(session) {
+    if session.is_empty()
+        || session.len() > 64
+        || !session
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
         bail!("nono audit session id '{session}' is invalid");
     }
     Ok(())
-}
-
-fn is_valid_session_id(session: &str) -> bool {
-    !session.is_empty() && session.chars().all(|ch| ch.is_ascii_digit() || ch == '-')
 }
 
 #[cfg(test)]
@@ -176,103 +224,93 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_session_id_from_plain_line() {
+    fn rejects_escaping_or_unbounded_session_ids() {
+        for session in [
+            "",
+            "../../evil",
+            "/tmp/evil",
+            "name with spaces",
+            &"a".repeat(65),
+        ] {
+            assert!(validate_session_id(session).is_err(), "{session}");
+        }
+    }
+
+    #[test]
+    fn evidence_must_match_both_assigned_session_and_command() -> Result<()> {
+        let good = serde_json::json!({"session_id": "runseal-audit-123", "command": ["/usr/bin/bash", "-c", "exit 3"]});
+        validate_evidence(&good, "runseal-audit-123", "exit 3")?;
+        assert!(validate_evidence(&good, "runseal-audit-456", "exit 3").is_err());
+        assert!(validate_evidence(&good, "runseal-audit-123", "true").is_err());
+        assert!(validate_evidence(&serde_json::json!({}), "runseal-audit-123", "true").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn each_invocation_has_its_own_private_directory() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let base = tempfile::tempdir()?;
+        let one = AuditRun::prepare(base.path())?;
+        let two = AuditRun::prepare(base.path())?;
+        assert_ne!(one.session(), two.session());
+        assert_ne!(one.output_dir, two.output_dir);
+        assert!(one.output_dir.starts_with(base.path().canonicalize()?));
         assert_eq!(
-            parse_session_id("20260511-125727-22312 blocked command"),
-            Some("20260511-125727-22312")
+            fs::metadata(one.output_dir)?.permissions().mode() & 0o777,
+            0o700
         );
+        Ok(())
     }
 
     #[test]
-    fn parses_session_id_after_prefix_columns() {
+    fn replacing_an_output_directory_at_the_same_path_is_rejected() -> Result<()> {
+        let base = tempfile::tempdir()?;
+        let audit = AuditRun::prepare(base.path())?;
+        fs::rename(&audit.output_dir, base.path().join("original"))?;
+        fs::create_dir(&audit.output_dir)?;
+        assert!(audit.validate_output_directory().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn output_files_are_never_replaced_or_followed() -> Result<()> {
+        let base = tempfile::tempdir()?;
+        let audit = AuditRun::prepare(base.path())?;
+        let target = audit.output_dir.join(format!("{}.json", audit.session));
+        fs::write(&target, "original")?;
+        let link = audit.output_dir.join("summary.md");
+        std::os::unix::fs::symlink(&target, &link)?;
+        assert!(audit
+            .write_new(ExportFile::Summary, b"replacement")
+            .is_err());
+        assert!(audit
+            .write_new(ExportFile::Evidence, b"replacement")
+            .is_err());
+        assert_eq!(fs::read_to_string(target)?, "original");
+        Ok(())
+    }
+
+    #[test]
+    fn writes_stay_in_the_opened_directory_after_path_replacement() -> Result<()> {
+        let base = tempfile::tempdir()?;
+        let audit = AuditRun::prepare(base.path())?;
+        let original = base.path().join("original");
+        let replacement = base.path().join("replacement");
+        audit.validate_output_directory()?;
+        fs::rename(&audit.output_dir, &original)?;
+        fs::create_dir(&replacement)?;
+        std::os::unix::fs::symlink(&replacement, &audit.output_dir)?;
+        audit.write_new(ExportFile::Summary, b"evidence")?;
+        assert_eq!(fs::read(original.join("summary.md"))?, b"evidence");
+        assert_eq!(fs::read_dir(&replacement)?.count(), 0);
+        assert!(audit.validate_output_directory().is_err());
         assert_eq!(
-            parse_session_id("session 20260511-125727-22312"),
-            Some("20260511-125727-22312")
+            fs::metadata(original.join("summary.md"))?
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
         );
-    }
-
-    #[test]
-    fn parses_session_ids_from_json_list() {
-        let sessions = parse_audit_list_json(
-            r#"[
-              {
-                "session_id": "20260606-184133-1234",
-                "command": "bash -c cargo publish"
-              },
-              {
-                "session_id": "20260606-184200-5678",
-                "command": "true"
-              }
-            ]"#,
-        )
-        .expect("parse json");
-
-        assert_eq!(
-            sessions,
-            vec!["20260606-184133-1234", "20260606-184200-5678"]
-        );
-    }
-
-    #[test]
-    fn rejects_traversal_session_ids_from_json_list() {
-        let err = parse_audit_list_json(
-            r#"[
-              {
-                "session_id": "../../../../tmp/evil",
-                "command": "true"
-              }
-            ]"#,
-        )
-        .expect_err("traversal session id must fail");
-
-        assert!(
-            err.to_string().contains("session id"),
-            "unexpected error: {err:#}"
-        );
-    }
-
-    #[test]
-    fn rejects_absolute_session_ids_from_json_list() {
-        let err = parse_audit_list_json(
-            r#"[
-              {
-                "session_id": "/tmp/evil",
-                "command": "true"
-              }
-            ]"#,
-        )
-        .expect_err("absolute session id must fail");
-
-        assert!(
-            err.to_string().contains("session id"),
-            "unexpected error: {err:#}"
-        );
-    }
-
-    #[test]
-    fn export_rejects_invalid_session_ids_before_writing() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let export = AuditExport {
-            sessions: vec!["../../evil".to_string()],
-            used_latest_fallback: false,
-        };
-
-        let err = export_sessions(&export, dir.path()).expect_err("invalid session id must fail");
-
-        assert!(
-            err.to_string().contains("session id"),
-            "unexpected error: {err:#}"
-        );
-        assert!(
-            !dir.path().join("evil.error.txt").exists(),
-            "invalid session id must not be written"
-        );
-    }
-
-    #[test]
-    fn empty_json_list_output_has_no_sessions() {
-        assert!(parse_audit_list_json("")
-            .expect("empty output parses")
-            .is_empty());
+        Ok(())
     }
 }

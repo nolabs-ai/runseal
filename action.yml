@@ -46,6 +46,17 @@ inputs:
     required: false
     default: "false"
 
+outputs:
+  audit-directory:
+    description: "Unique audit export directory for this invocation, including failure summaries"
+    value: ${{ steps.sealed.outputs.audit-directory }}
+  audit-session-id:
+    description: "Exact nono session ID assigned to this invocation"
+    value: ${{ steps.sealed.outputs.audit-session-id }}
+  audit-artifact-name:
+    description: "Unique audit artifact name for this invocation"
+    value: ${{ steps.sealed.outputs.audit-artifact-name }}
+
 runs:
   using: "composite"
   steps:
@@ -59,6 +70,7 @@ runs:
         RUNSEAL_ACTION_PATH: ${{ github.action_path }}
         GH_TOKEN: ${{ github.token }}
     - name: Run sealed command
+      id: sealed
       shell: bash
       run: bash "${{ github.action_path }}/scripts/run-sealed.sh"
       env:
@@ -71,9 +83,9 @@ runs:
         RUNSEAL_AUDIT: ${{ inputs.audit }}
         RUNSEAL_AUDIT_DIR: ${{ runner.temp }}/runseal-audit
     - name: Upload Runseal audit
-      if: ${{ always() && (inputs.audit == 'artifact' || inputs.audit == 'true') }}
+      if: ${{ always() && steps.sealed.outputs.audit-directory != '' }}
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
-        name: runseal-audit
-        path: ${{ runner.temp }}/runseal-audit
-        if-no-files-found: warn
+        name: ${{ steps.sealed.outputs.audit-artifact-name }}
+        path: ${{ steps.sealed.outputs.audit-directory }}
+        if-no-files-found: error

@@ -16,6 +16,20 @@ pub struct NonoProfile {
     network: Network,
 }
 
+impl NonoProfile {
+    #[must_use = "protected directory validation failures must abort the run"]
+    pub fn deny_directory(&mut self, path: &Path) -> Result<()> {
+        let canonical = path
+            .canonicalize()
+            .context("failed to canonicalize protected directory")?;
+        let path = canonical
+            .to_str()
+            .context("protected directory is not UTF-8")?;
+        self.filesystem.deny.push(path.to_string());
+        Ok(())
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct Meta {
     name: &'static str,
@@ -299,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_profile_denies_credential_tempdir() {
+    fn generated_profile_preserves_credential_denies_when_protecting_audit_base() -> Result<()> {
         let config = RunConfig {
             command: "true".to_string(),
             fs_read: vec![".".to_string()],
@@ -309,7 +323,7 @@ mod tests {
             audit: crate::config::AuditConfig::Disabled,
             repo_profile: None,
         };
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = tempfile::tempdir()?;
         let credential_file = dir.path().join("cratesio");
         let sealed = SealedCredentials {
             access: vec![SealedCredential {
@@ -325,17 +339,28 @@ mod tests {
             sanitized_env: BTreeMap::new(),
         };
 
-        let profile = build_profile(&config, &sealed).expect("profile");
-        let json: serde_json::Value =
-            serde_json::to_value(&profile).expect("profile serializes as JSON");
+        let mut profile = build_profile(&config, &sealed)?;
+        let base = tempfile::tempdir()?;
+        let target = base.path().join("audit");
+        fs::create_dir(&target)?;
+        let alias = base.path().join("alias");
+        std::os::unix::fs::symlink(&target, &alias)?;
+        profile.deny_directory(&alias)?;
+        assert!(profile
+            .deny_directory(&base.path().join("missing"))
+            .is_err());
+        let json: serde_json::Value = serde_json::to_value(&profile)?;
         let denied = json["filesystem"]["deny"]
             .as_array()
-            .expect("filesystem.deny is present");
+            .context("filesystem.deny is missing")?;
 
         assert!(denied.iter().any(|path| {
             path.as_str()
                 .is_some_and(|path| path == sealed.dir.path().to_string_lossy())
         }));
+        assert!(denied.contains(&serde_json::json!(target.canonicalize()?)));
+        assert!(!denied.contains(&serde_json::json!(alias)));
+        Ok(())
     }
 
     #[test]

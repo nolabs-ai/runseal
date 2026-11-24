@@ -8,7 +8,7 @@ fn installed_binary_advertises_profile_support() -> anyhow::Result<()> {
         .arg("capabilities")
         .output()?;
     assert!(output.status.success());
-    assert_eq!(output.stdout, b"repo-profile-v1\n");
+    assert_eq!(output.stdout, b"repo-profile-v1\naudit-session-v1\n");
     Ok(())
 }
 
@@ -49,6 +49,38 @@ fn launcher_checks_profile_support_before_running() -> anyhow::Result<()> {
             .output()?;
         assert_eq!(output.status.success(), should_run, "{output:?}");
         assert_eq!(marker.exists(), should_run, "{output:?}");
+    }
+    Ok(())
+}
+
+#[test]
+fn launcher_rejects_legacy_audit_export_before_running() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let binary = dir.path().join("runseal");
+    fs::write(&binary, "#!/bin/sh\ncase \"$1\" in\ncapabilities) printf '%s\\n' \"$TEST_CAPABILITIES\";;\nrun) exit 9;;\nesac\n")?;
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))?;
+    let path = std::env::join_paths([
+        dir.path(),
+        std::path::Path::new("/usr/bin"),
+        std::path::Path::new("/bin"),
+    ])?;
+    for (capabilities, audit, expected) in [
+        ("repo-profile-v1", "artifact", 1),
+        ("repo-profile-v1", " true ", 1),
+        ("audit-session-v1", "artifact", 9),
+        ("audit-session-v1", " true ", 9),
+    ] {
+        let output = Command::new("bash")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/scripts/run-sealed.sh"
+            ))
+            .env("PATH", &path)
+            .env("RUNSEAL_PROFILE", "")
+            .env("RUNSEAL_AUDIT", audit)
+            .env("TEST_CAPABILITIES", capabilities)
+            .output()?;
+        assert_eq!(output.status.code(), Some(expected), "{output:?}");
     }
     Ok(())
 }
